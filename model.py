@@ -448,7 +448,6 @@ class Simple_FCN(Model):
         y1 = self.transposed_conv13(y1)
         return y1
 
-# pip install cupy-cuda112 -i https://pypi.tuna.tsinghua.edu.cn/simple/ --trusted-host pypi.tuna.tsinghua.edu.cn
 class Simple_ResNet(Model):
     def __init__(self,activation=ReLU):
         super().__init__()
@@ -473,8 +472,10 @@ class Simple_ResNet(Model):
         return x
 
 
-x=np.random.random((3,3,224,224))
-model=Simple_ResNet()
-y=model(x)
+
+# x=np.random.random((3,3,224,224))
+# model=Simple_ResNet()
+# y=model(x)
 # y.backward()
 # model.save_to_onnx(x)
+

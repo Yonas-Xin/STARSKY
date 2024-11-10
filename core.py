@@ -571,7 +571,6 @@ class Affine(Function):
 def affine(x,W,b):
     return Affine()(x,W,b)
 
-'''有错，需要修改'''
 class BatchNormalization(Function):
     def __init__(self,gamma=1.0,beta=0,momentum=0.9,training=True):
         self.gamma=gamma#ndarray或float
