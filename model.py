@@ -144,7 +144,9 @@ class Model(Layer):
                 num += 1 * test.batch_size
         tqdm.write(f'Test_Acc: {sum_acc / len(test)}')
 
-
+# =============================================================================
+'''一些经典的model'''
+# =============================================================================
 class MLP(Model):
     '''fc_output_sizes：tuple，输入层的神经元个数，全连接层神经网络'''
     def __init__(self, fc_output_sizes, activation=sigmoid):
