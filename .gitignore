@@ -1,0 +1,4 @@
+
+sky_dataset/dataset.npz
+sky_dataset/voc2012_test.npz
+sky_dataset/voc2012_train.npz
