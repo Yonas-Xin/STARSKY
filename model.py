@@ -41,7 +41,6 @@ class Model(Layer):
         graph=create_graph(y)
         save_graph(graph,model_name,file_name=path,ifsimplify=True)
         return
-
     def train(self, train, lr=0.001, epoch=100, test=None, plot=False, plot_rate=0.1, loss_func=skystar.core.softmaxwithloss,
               accuracy=skystar.utils.accuracy, optimizer=Adam, use_gpu=True, save_model=True,autodecrese=False):
         '''
@@ -449,8 +448,7 @@ class Simple_FCN(Model):
         y1 = self.transposed_conv13(y1)
         return y1
 
-
-
+# pip install cupy-cuda112 -i https://pypi.tuna.tsinghua.edu.cn/simple/ --trusted-host pypi.tuna.tsinghua.edu.cn
 class Simple_ResNet(Model):
     def __init__(self,activation=ReLU):
         super().__init__()
@@ -474,8 +472,9 @@ class Simple_ResNet(Model):
         x=self.residual3_2(x)
         return x
 
+
 x=np.random.random((3,3,224,224))
 model=Simple_ResNet()
 y=model(x)
-y.backward()
-model.save_to_onnx(x)
+# y.backward()
+# model.save_to_onnx(x)
