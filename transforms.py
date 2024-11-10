@@ -98,7 +98,6 @@ class ToPIL:
         data = array.transpose(1, 2, 0)
         return Image.fromarray(data)
 
-
 class RandomHorizontalFlip:
     pass
 
