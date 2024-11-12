@@ -144,6 +144,36 @@ class Model(Layer):
         tqdm.write(f'Test_Acc: {sum_acc / len(test)}')
 
 # =============================================================================
+'''使用Sequential类自由组合block，打造model。自由生成的Sequential可以使用Model的所有函数'''
+# =============================================================================
+class Sequential(Model):
+    def __init__(self):
+        super().__init__()
+        '''_blocks里的block序号从1开始'''
+        self._blocks=OrderedDict()
+        self.num_blocks=0
+    def add(self,layers):
+        '''传入一个block或者包含多个block的元组'''
+        if isinstance(layers,tuple):
+            for layer in layers:
+                self.num_blocks += 1
+                self._blocks[layer.name + f'_{self.num_blocks}'] = layer
+        self.num_blocks+=1
+        self._blocks[layers.name+f'_{self.num_blocks}']=layers
+    def delete(self,index=None):
+        if index is None:
+            index = self.num_blocks
+            self.num_blocks -= 1
+        for i in range(1,len(self._blocks)+1):
+            if i==index:
+                del self._blocks[i]
+                self.num_blocks -= 1
+                return
+    def __call__(self,*x,training=True):
+        for layer in self._blocks.values():
+            x=layer(x,training=training)
+        return x
+# =============================================================================
 '''一些经典的model'''
 # =============================================================================
 class MLP(Model):
@@ -407,9 +437,9 @@ class Simple_FCN(Model):
         self.conv_11=Convolution(4096,1,1)
         self.conv_12=Convolution(4096,1,1)
         self.conv_13=Convolution(2,1,1)
-        self.transposed_conv11=Transpose_Convlution(2, 4, 4, stride=2, pad=1, nobias=True)
-        self.transposed_conv12=Transpose_Convlution(2, 4, 4, stride=2, pad=1, nobias=True)
-        self.transposed_conv13=Transpose_Convlution(2, 32, 24, stride=8, pad=8, nobias=True)
+        self.transposed_conv11=Transpose_Convolution(2, 4, 4, stride=2, pad=1, nobias=True)
+        self.transposed_conv12=Transpose_Convolution(2, 4, 4, stride=2, pad=1, nobias=True)
+        self.transposed_conv13=Transpose_Convolution(2, 32, 24, stride=8, pad=8, nobias=True)
 
     def forward(self,x,training=True):
         y1=self.conv1_1(x)
@@ -460,6 +490,7 @@ class Simple_ResNet(Model):
         self.residual2_2=ResidualBlock(32,stride=1,use_conv1x1=False)
         self.residual3_1=ResidualBlock(64,stride=2,use_conv1x1=True)
         self.residual3_2=ResidualBlock(64,stride=1,use_conv1x1=False)
+        self.affine=Affine(10)
     def forward(self,x,training=True):
         x=ReLU(self.conv1(x))
         x=self.pool1(x)
@@ -469,21 +500,23 @@ class Simple_ResNet(Model):
         x=self.residual2_2(x)
         x=self.residual3_1(x)
         x=self.residual3_2(x)
+        x=self.affine(x)
         return x
 
 class Simple_densenet(Model):
-    def __init__(self,activation=ReLU):
+    def __init__(self,activation=ReLU,to_gpu=True):
         super().__init__()
         self.activation=activation
         self.conv1=Convolution(16,3,3,pad=1)
         self.BN1=BatchNorm()
         self.pool1=Pooling(2,stride=2)
-        self.dense1=DenseBlock(32,4)
+        self.dense1=DenseBlock(32,4, to_gpu=to_gpu)
         self.transition1=TransitionBlock(32)
-        self.dense2=DenseBlock(64,4)
+        self.dense2=DenseBlock(64,4, to_gpu=to_gpu)
         self.transition2=TransitionBlock(64)
-        self.dense3=DenseBlock(64,4)
+        self.dense3=DenseBlock(64,4, to_gpu=to_gpu)
         self.transition3=TransitionBlock(64)
+        self.affine=Affine(10)
     def forward(self,x,training=True):
         x=self.conv1(x)
         x=self.BN1(x)
@@ -495,12 +528,12 @@ class Simple_densenet(Model):
         x=self.transition2(x)
         x=self.dense3(x)
         x=self.transition3(x)
+        x=self.affine(x)
         return x
 
-
-x=np.random.random((3,3,224,224))
-model=Simple_densenet()
-y=model(x)
-y.backward()
-model.save_to_onnx(x,ifsimplify=False)
+# x=np.random.random((3,3,224,224))
+# model=Simple_densenet()
+# y=model(x)
+# y.backward()
+# model.save_to_onnx(x,ifsimplify=False)
 
