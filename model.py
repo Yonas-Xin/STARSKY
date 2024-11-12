@@ -25,7 +25,7 @@ class Model(Layer):
             y.data = np.argmax(y.data, axis=1)
             sum = t.size
             return np.sum(y.data == t) / sum
-    def save_to_onnx(self,*inputs,name=None):
+    def save_to_onnx(self,*inputs,name=None,ifsimplify=True):
         '''
         :param inputs: 需要使用一个模型的输入
         :param name:
@@ -39,7 +39,7 @@ class Model(Layer):
         path=os.path.join(dir,'model_params',name)
         y=self.forward(*inputs)
         graph=create_graph(y)
-        save_graph(graph,model_name,file_name=path,ifsimplify=True)
+        save_graph(graph,model_name,file_name=path,ifsimplify=ifsimplify)
         return
     def train(self, train, lr=0.001, epoch=100, test=None, plot=False, plot_rate=0.1, loss_func=skystar.core.softmaxwithloss,
               accuracy=skystar.utils.accuracy, optimizer=Adam, use_gpu=True, save_model=True,autodecrese=False):
@@ -471,11 +471,36 @@ class Simple_ResNet(Model):
         x=self.residual3_2(x)
         return x
 
+class Simple_densenet(Model):
+    def __init__(self,activation=ReLU):
+        super().__init__()
+        self.activation=activation
+        self.conv1=Convolution(16,3,3,pad=1)
+        self.BN1=BatchNorm()
+        self.pool1=Pooling(2,stride=2)
+        self.dense1=DenseBlock(32,4)
+        self.transition1=TransitionBlock(32)
+        self.dense2=DenseBlock(64,4)
+        self.transition2=TransitionBlock(64)
+        self.dense3=DenseBlock(64,4)
+        self.transition3=TransitionBlock(64)
+    def forward(self,x,training=True):
+        x=self.conv1(x)
+        x=self.BN1(x)
+        x=ReLU(x)
+        x=self.pool1(x)
+        x=self.dense1(x)
+        x=self.transition1(x)
+        x=self.dense2(x)
+        x=self.transition2(x)
+        x=self.dense3(x)
+        x=self.transition3(x)
+        return x
 
 
-# x=np.random.random((3,3,224,224))
-# model=Simple_ResNet()
-# y=model(x)
-# y.backward()
-# model.save_to_onnx(x)
+x=np.random.random((3,3,224,224))
+model=Simple_densenet()
+y=model(x)
+y.backward()
+model.save_to_onnx(x,ifsimplify=False)
 
