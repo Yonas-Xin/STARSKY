@@ -1,5 +1,5 @@
 import os.path
-
+from collections import OrderedDict
 import skystar.utils
 from skystar.core import *
 from skystar import cuda
@@ -8,7 +8,6 @@ import numpy as np
 # =============================================================================
 '''Layer类'''
 # =============================================================================
-
 class Layer:
     '''training：某些层的使用分训练和测试两种类型，模型使用时默认training为True，
     如果训练完毕需要使用accurancy预测，请将training设置为False,一些不分测试，训
@@ -17,7 +16,7 @@ class Layer:
         self._params=set()#创建空集合，集合存储了实例的属性名，使用__dict__[name]可以取出属性值，集合的值无序且唯一，便于更新权重
 
     def __setattr__(self, name, value):#重写__setattr__，改变或添加实例属性的值时，会调用__setattr__
-        if isinstance(value,(Parameter,Layer)):
+        if isinstance(value,(Parameter,Layer,OrderedDict)):
             self._params.add(name)
         super().__setattr__(name,value)
 
@@ -37,12 +36,21 @@ class Layer:
 
     def params(self):#生成器
         '''先从模型中迭代Layer属性，再从Layer中迭代它的Parameter属性，由此可迭代出模型里所有Layer的所有_params'''
+        # for name in self._params:
+        #     if isinstance(obj,Layer):#如果对象是Layer，迭代返回_params
+        #         yield from obj.params()
+        #     # yield  暂停处理并返回值，再次调用params，暂停的处理再次运行，这样可以按顺序取出_params所有值
+        #     #比如[1,2,3],使用yield取出一，下次循环时取出2，直到所有元素取出，而return只能返回1
+        #     elif isinstance(obj,OrderedDict):
+        #         for obj in obj.values():
+        #             yield from obj.params()
+        #     else:
+        #         yield obj
         for name in self._params:
-            obj=self.__dict__[name]
-            if isinstance(obj,Layer):#如果对象是Layer，迭代返回_params
-                yield from obj.params()
-            # yield  暂停处理并返回值，再次调用params，暂停的处理再次运行，这样可以按顺序取出_params所有值
-            #比如[1,2,3],使用yield取出一，下次循环时取出2，直到所有元素取出，而return只能返回1
+            obj = getattr(self, name)  # 使用 getattr 获取属性，避免频繁查找
+            if isinstance(obj, (Layer, OrderedDict)):  # 合并 Layer 和 OrderedDict 的处理逻辑
+                for layer in obj.values() if isinstance(obj, OrderedDict) else [obj]:
+                    yield from layer.params()
             else:
                 yield obj
 
@@ -111,10 +119,25 @@ class Layer:
                 print(f'权重值维度不匹配：{W.ndim}！=4')
         else:
             print('权重尚未初始化：None')
+
+# =============================================================================
+#激活函数块，用于Sequential模型组合
+# =============================================================================
+class ReluBlock(Layer):
+    def __init__(self):
+        super().__init__()
+        self.name='ReluBlock'
+        self.relu=Relu()
+    def forward(self,x,training=True):
+        return self.relu(x)
+# =============================================================================
+#全连接层
+# =============================================================================
 class Affine(Layer):
     '''全连接层,只需要输入out_size,in_size可根据要传递的x大小自动计算得出'''
     def __init__(self, out_size, nobias=False, dtype=np.float32, in_size=None):
         super().__init__()
+        self.name='Affine'
         self.in_size = in_size
         self.out_size = out_size
         self.dtype = dtype
@@ -143,11 +166,14 @@ class Affine(Layer):
         y = affine(x, self.W, self.b)
         return y
 
-'''Batch_Norm层，放在激活函数层前或后，改善激活值的分布'''
+# =============================================================================
+#批量归一块
+# =============================================================================
 class BatchNorm(Layer):
     '''self.test_mean,self.test_var:储存全局均值和方差用于模型预测阶段，如果training为True，每次运行forward，数据会更新'''
     def __init__(self,gamma=1.0,beta=0,momentum=0.9):
         super().__init__()
+        self.name='BatchNorm'
         self.batchnorm_func=BatchNormalization(gamma=gamma,beta=beta,momentum=momentum)
 
     def forward(self,x,training=True):
@@ -166,6 +192,7 @@ class Convolution(Layer):
     in_channels：输入的通道数，也是核的通道数'''
     def __init__(self, FN, FH, FW, stride=1, pad=0, nobias=False, dtype=np.float32, in_channels=None):
         super().__init__()
+        self.name='Convolution'
         self.FN = FN
         self.FH = FH
         self.FW = FW
@@ -201,9 +228,10 @@ class Convolution(Layer):
 # =============================================================================
 #反卷积块
 # =============================================================================
-class Transpose_Convlution(Layer):
+class Transpose_Convolution(Layer):
     def __init__(self, FN, FH, FW, stride=1, pad=0, nobias=False, dtype=np.float32, in_channels=None):
         super().__init__()
+        self.name='Transpose_Convolution'
         self.FN = FN
         self.FH = FH
         self.FW = FW
@@ -243,6 +271,7 @@ class Transpose_Convlution(Layer):
 class ResidualBlock(Layer):
     def __init__(self,num_channels, stride=1, nobias=False, dtype=np.float32, use_conv1x1=False):
         super().__init__()
+        self.name='ResidualBlock'
         self.conv1=Convolution(FN=num_channels,FH=3,FW=3,stride=stride,pad=1,nobias=nobias, dtype=dtype)
         self.conv2=Convolution(FN=num_channels,FH=3,FW=3,stride=1,pad=1,nobias=nobias, dtype=dtype)
         if use_conv1x1:
@@ -265,16 +294,21 @@ class ResidualBlock(Layer):
 #稠密块
 # =============================================================================
 class DenseBlock(Layer):
-    def __init__(self, num_channels, num_convs):
+    def __init__(self, num_channels, num_convs, to_gpu=True):
         super().__init__()
+        self.name='DenseBlock'
         self.BNs={}
         self.Convs={}
+        self.to_gpu=to_gpu
 
         for _ in range(num_convs):
             conv_name=f'conv{_}'
             bn_name=f'bn{_}'
             self.BNs[bn_name]=BatchNorm()
             self.Convs[conv_name]=Convolution(FN=num_channels,FH=3,FW=3,stride=1,pad=1,nobias=False)
+            if self.to_gpu:
+                self.Convs[conv_name].to_gpu()
+                self.BNs[bn_name].to_gpu()
     def forward(self,x,training=True):
         for _ in range(len(self.Convs)):
             conv_name=f'conv{_}'
@@ -290,6 +324,7 @@ class DenseBlock(Layer):
 class TransitionBlock(Layer):
     def __init__(self,num_channels):
         super().__init__()
+        self.name='Transition'
         self.BN=BatchNorm()
         self.Conv1x1=Convolution(num_channels,1,1)
         self.pool1=Pooling(pool_size=2,stride=2,pad=0,mode='avg')
@@ -301,7 +336,7 @@ class TransitionBlock(Layer):
         return y
 
 # =============================================================================
-#最大池化块
+#池化块
 # =============================================================================
 class Pooling(Layer):
     '''
@@ -313,6 +348,7 @@ class Pooling(Layer):
     '''
     def __init__(self, pool_size, stride=1, pad=0, mode="max"):
         super().__init__()
+        self.name=mode+"pool"
         self.pool_size = pool_size
         self.stride = stride
         self.pad = pad
@@ -336,6 +372,7 @@ class RNN(Layer):
     '''self.h:既是自己的状态，也是自己的输出，自己的状态状态同时影响了输出'''
     def __init__(self,hidden_size,in_size=None):
         super().__init__()
+        self.name='RNN'
         self.x2h=Affine(hidden_size,in_size=in_size)
         self.h2h=Affine(hidden_size,in_size=in_size,nobias=True)#不要偏置b
         self.h=None
@@ -358,6 +395,7 @@ class LSTM(Layer):
     '''比一般RNN更好的时间序列预测层'''
     def __init__(self,hidden_size,in_size=None):
         super().__init__()
+        self.name='LSTM'
         H,I=hidden_size,in_size
         self.x2f=Affine(H,in_size=I)
         self.x2i=Affine(H,in_size=I)
