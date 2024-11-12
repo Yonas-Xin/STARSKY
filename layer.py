@@ -155,7 +155,9 @@ class BatchNorm(Layer):
         x=self.batchnorm_func(x)
         return x
 
-
+# =============================================================================
+#卷积块
+# =============================================================================
 class Convolution(Layer):
     '''卷积层：
     FN：核的数量，也是输出的通道数
@@ -196,6 +198,9 @@ class Convolution(Layer):
         y = convolution(x, self.W, self.b, self.stride, self.pad)
         return y
 
+# =============================================================================
+#反卷积块
+# =============================================================================
 class Transpose_Convlution(Layer):
     def __init__(self, FN, FH, FW, stride=1, pad=0, nobias=False, dtype=np.float32, in_channels=None):
         super().__init__()
@@ -232,7 +237,9 @@ class Transpose_Convlution(Layer):
         y = transposed_convolution(x, self.W, self.b, self.stride, self.pad)
         return y
 
+# =============================================================================
 #残差块
+# =============================================================================
 class ResidualBlock(Layer):
     def __init__(self,num_channels, stride=1, nobias=False, dtype=np.float32, use_conv1x1=False):
         super().__init__()
@@ -254,21 +261,77 @@ class ResidualBlock(Layer):
         return y
 
 
-class Pooling(Layer):
-    '''池化层：
-    pool_size：池化窗口大小
-    stride：步长
-    pad：填充'''
-    def __init__(self,pool_size,stride=1,pad=0):
+# =============================================================================
+#稠密块
+# =============================================================================
+class DenseBlock(Layer):
+    def __init__(self, num_channels, num_convs):
         super().__init__()
-        self.pool_size=pool_size
-        self.stride=stride
-        self.pad=pad
+        self.BNs={}
+        self.Convs={}
 
+        for _ in range(num_convs):
+            conv_name=f'conv{_}'
+            bn_name=f'bn{_}'
+            self.BNs[bn_name]=BatchNorm()
+            self.Convs[conv_name]=Convolution(FN=num_channels,FH=3,FW=3,stride=1,pad=1,nobias=False)
     def forward(self,x,training=True):
-        y=pooling(x,self.pool_size,self.stride,self.pad)
+        for _ in range(len(self.Convs)):
+            conv_name=f'conv{_}'
+            bn_name=f'bn{_}'
+            y=self.BNs[bn_name](x,training=training)
+            y=ReLU(y)
+            y=self.Convs[conv_name](y,training=training)
+            x=concat(x,y,axis=1)
+        return y
+# =============================================================================
+#过渡层，用在稠密层之后
+# =============================================================================
+class TransitionBlock(Layer):
+    def __init__(self,num_channels):
+        super().__init__()
+        self.BN=BatchNorm()
+        self.Conv1x1=Convolution(num_channels,1,1)
+        self.pool1=Pooling(pool_size=2,stride=2,pad=0,mode='avg')
+    def forward(self,x,training=True):
+        y=self.BN(x)
+        y=ReLU(y)
+        y=self.Conv1x1(y,training=training)
+        y=self.pool1(y,training=training)
         return y
 
+# =============================================================================
+#最大池化块
+# =============================================================================
+class Pooling(Layer):
+    '''
+    池化层：
+    pool_size：池化窗口大小
+    stride：步长
+    pad：填充
+    mode：池化模式，"max" 表示最大池化，"avg" 表示平均池化
+    '''
+    def __init__(self, pool_size, stride=1, pad=0, mode="max"):
+        super().__init__()
+        self.pool_size = pool_size
+        self.stride = stride
+        self.pad = pad
+        self.mode = mode  # 新增参数，选择 "max" 或 "avg"
+
+    def forward(self, x, training=True):
+        if self.mode == "max":
+            y = maxpool(x, self.pool_size, self.stride, self.pad)
+        elif self.mode == "avg":
+            y = avgpool(x, self.pool_size, self.stride, self.pad)
+        else:
+            raise ValueError("mode 参数必须是 'max' 或 'avg'")
+        return y
+
+
+
+# =============================================================================
+#循环神经块
+# =============================================================================
 class RNN(Layer):
     '''self.h:既是自己的状态，也是自己的输出，自己的状态状态同时影响了输出'''
     def __init__(self,hidden_size,in_size=None):
@@ -287,6 +350,10 @@ class RNN(Layer):
         self.h=h_new
         return self.h
 
+
+# =============================================================================
+#长短时记忆块
+# =============================================================================
 class LSTM(Layer):
     '''比一般RNN更好的时间序列预测层'''
     def __init__(self,hidden_size,in_size=None):
