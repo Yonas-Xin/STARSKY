@@ -135,6 +135,9 @@ def create_relu_node(f, graph):
 def create_maxpool_node(f, graph):
     return create_node(f, graph, 'MaxPool', kernel_shape=[f.pool_size, f.pool_size],
                        strides=[f.stride, f.stride], pads=[0, 0, f.pad, f.pad])
+def create_AveragePool_node(f, graph):
+    return create_node(f, graph, 'AveragePool', kernel_shape=[f.pool_size, f.pool_size],
+                       strides=[f.stride, f.stride], pads=[0, 0, f.pad, f.pad])
 def create_dropout_node(f, graph):
     return create_node(f, graph, 'Dropout', seed=f.ratio, training_mode=f.training, mask=f.mask)
 
@@ -224,7 +227,8 @@ def create_meansquarederror_node(f, graph):
     pass
 def create_Affine_node(f, graph):
     pass
-
+def create_Concat_node(f, graph):
+    return create_node(f, graph, 'Concat',axis=f.axis)
 #使用节点的字典
 function_nodes = {
     'SoftmaxCrossEntropyLoss': create_softmaxcrossentropyloss_node,
@@ -239,5 +243,7 @@ function_nodes = {
     'ConvTranspose': create_convtranspose_node,
     'MaxPool': create_maxpool_node,
     'Add': create_add_node,
-    'Mul': create_multify_node
+    'Mul': create_multify_node,
+    "Concat": create_Concat_node,
+    "AveragePool":create_AveragePool_node
     }
