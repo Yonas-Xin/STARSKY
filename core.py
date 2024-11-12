@@ -191,7 +191,8 @@ class Exp(Function):
         return y
     def backward(self,dout):
         x=self.inputs[0]
-        dout=np.exp(x)*dout
+        xp=skystar.cuda.get_array_module(dout)
+        dout=xp.exp(x)*dout
         return dout
 class Square(Function):
     def forward(self,x):
@@ -413,8 +414,9 @@ class Transpose(Function):
     def backward(self, gy):
         if self.axes is None:
             return transpose(gy)
+        xp=skystar.cuda.get_array_module(gy)
         axes_len = len(self.axes)
-        inv_axes = tuple(np.argsort([ax % axes_len for ax in self.axes]))
+        inv_axes = tuple(xp.argsort([ax % axes_len for ax in self.axes]))
         return transpose(gy, inv_axes)
 def transpose(x, axes=None):
     return Transpose(axes)(x)
@@ -438,7 +440,8 @@ class BroadcastTo(Function):#广播
         self.shape=shape
     def forward(self,x):
         self.x_shape=x.shape
-        y=np.broadcast_to(x,self.shape)
+        xp=skystar.cuda.get_array_module(x)
+        y=xp.broadcast_to(x,self.shape)
         return y
     def backward(self,dout):
         dout=sum_to(dout,self.x_shape)
@@ -461,6 +464,28 @@ def sum_to(x,shape):
     if x.shape==shape:
         return as_variable(x)
     return SumTo(shape)(x)
+
+
+class Concat(Function):
+    def __init__(self, axis=1):
+        self.axis = axis  # 指定拼接的维度轴
+    def forward(self, x0, x1):
+        # 获取所有输入的形状
+        self.shapes = [x0.shape,x1.shape]
+        xp=skystar.cuda.get_array_module(x0)
+        # 在指定轴上拼接输入
+        y = xp.concatenate((x0,x1), axis=self.axis)
+        return y
+    def backward(self, dout):
+        # 根据 forward 时记录的形状信息，将 dout 拆分成与 x0 和 x1 形状相同的部分
+        axis = self.axis
+        xp=skystar.cuda.get_array_module(dout)
+        x0_shape, x1_shape = self.shapes
+        # 使用 split 将 dout 分割回 x0 和 x1 的大小
+        dx0, dx1 = xp.split(dout.data, [x0_shape[axis]], axis=axis)
+        return dx0, dx1
+def concat(x0, x1, axis=0):
+    return Concat(axis)(x0,x1)
 
 # =============================================================================
 '''激活函数'''
@@ -612,8 +637,8 @@ class BatchNormalization(Function):
         dgamma=sum(dout*self.xv,axis=0)#Variable
         dbeta=sum(dout,axis=0)#Variable
         dxv=dout*self.gamma#Variable
-        dvar=sum(dxv*(x-self.mean)*np.power(self.var + 1e-7, -1.5)*(-0.5),axis=0)#Variable
-        dmean=-1.0*sum(dxv,axis=0)/np.sqrt(self.var+1e-7)+dvar*sum(-2.0*(x-self.mean),axis=0)/N#Variable
+        dvar=sum(dxv*(x-self.mean)*xp.power(self.var + 1e-7, -1.5)*(-0.5),axis=0)#Variable
+        dmean=-1.0*sum(dxv,axis=0)/xp.sqrt(self.var+1e-7)+dvar*sum(-2.0*(x-self.mean),axis=0)/N#Variable
         dx=dxv/xp.sqrt(self.var+1e-7)+dvar*2*(x-self.mean)/N+dmean/N#Variable
         self.gamma-=0.01*dgamma.data
         self.beta-=0.01*dbeta.data
@@ -779,6 +804,39 @@ class MaxPool(Function):
         dx = skystar.utils.col2im(dcol, x.shape, self.pool_size, self.pool_size, self.stride, self.pad)
         dx = Variable(dx)
         return dx
-
-def pooling(x,pool_size,stride=1,pad=0):
+def maxpool(x,pool_size,stride=1,pad=0):
     return MaxPool(pool_size,stride,pad)(x)
+
+class AveragePool(Function):
+    '''平均池化层，取池化窗口的平均值'''
+    def __init__(self, pool_size, stride=1, pad=0):
+        self.pool_size = pool_size  # int
+        self.stride = stride  # int
+        self.pad = pad  # int
+    def forward(self, x):
+        xp = skystar.cuda.get_array_module(x)
+        N, C, H, W = x.shape
+        out_h = int(1 + (H - self.pool_size) / self.stride)
+        out_w = int(1 + (W - self.pool_size) / self.stride)
+        # 展开为二维数组
+        col = skystar.utils.im2col(x, self.pool_size, self.pool_size, self.stride, self.pad)
+        col = col.reshape(-1, self.pool_size * self.pool_size)
+        # 计算平均值
+        out = xp.mean(col, axis=1)
+        # 转换为四维数组
+        out = out.reshape(N, out_h, out_w, C).transpose(0, 3, 1, 2)
+        return out
+    def backward(self, dout):
+        x = self.inputs[0]
+        dout = dout.transpose(0, 2, 3, 1)
+        # 计算反向传播
+        pool_size = self.pool_size * self.pool_size
+        dmean = dout / pool_size
+        dmean = Variable(dmean.data.repeat(pool_size, axis=-1))
+
+        dcol = dmean.reshape(dmean.shape[0] * dmean.shape[1] * dmean.shape[2], -1)
+        dx = skystar.utils.col2im(dcol.data, x.shape, self.pool_size, self.pool_size, self.stride, self.pad)
+        dx = Variable(dx)
+        return dx
+def avgpool(x,pool_size,stride=1,pad=0):
+    return AveragePool(pool_size,stride,pad)(x)
