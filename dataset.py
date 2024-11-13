@@ -1,6 +1,6 @@
 import numpy as np
 try:
-    # from skystar.dataset_mnist.mnist import load_mnist
+    from skystar.dataset_mnist.mnist import load_mnist
     # from skystar.STL10 import read_all_images, read_labels
     # from skystar.tiny_image import load_data
     from skystar.sky_dataset.load import _loaddata

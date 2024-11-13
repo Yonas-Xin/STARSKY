@@ -7,86 +7,93 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import numpy as np
 
-from skystar.voc2012 import VOC_COLORMAP#颜色条
-def _dot_var(v,verbose=False):#v是Variable实例,该函数实现单个元素的dot转换
+from skystar.voc2012 import VOC_COLORMAP  # 颜色条
+
+
+def _dot_var(v, verbose=False):  # v是Variable实例,该函数实现单个元素的dot转换
     def shape_txt(x):
-        label='shape['
+        label = 'shape['
         for i in range(len(x.shape)):
             _str = str(x.shape[i])
-            if i!=len(x.shape)-1:
+            if i != len(x.shape) - 1:
                 label += _str + ' '
             else:
                 label += _str
-        label+=']'
+        label += ']'
         return label
-    dot_var='{} [label="{}", color=orange, style=filled]\n'
+
+    dot_var = '{} [label="{}", color=orange, style=filled]\n'
     if v.name is None:
-        name=' '
+        name = ' '
     else:
-        name=v.name
+        name = v.name
 
     if v.data is None:
-        name+='None'
+        name += 'None'
     if verbose and v.data is not None:
         if v.name is not None:
-            name+='\n'
+            name += '\n'
         else:
-            name='X\n'
-        name+=shape_txt(v)+'\ndtype:'+str(v.dtype)
+            name = 'X\n'
+        name += shape_txt(v) + '\ndtype:' + str(v.dtype)
 
-    return dot_var.format(id(v),name)
+    return dot_var.format(id(v), name)
 
-def _dot_func(f):#f是函数，该函数实现输入函数的dot转化
-    dot_func='{} [label="{}", color=lightblue, style=filled, shape=box]\n'
-    txt=dot_func.format(id(f),f.__class__.__name__)
 
-    dot_edge='{} -> {}\n'
+def _dot_func(f):  # f是函数，该函数实现输入函数的dot转化
+    dot_func = '{} [label="{}", color=lightblue, style=filled, shape=box]\n'
+    txt = dot_func.format(id(f), f.__class__.__name__)
+
+    dot_edge = '{} -> {}\n'
     for x in f.inputs:
-        txt+=dot_edge.format(id(x),id(f))
+        txt += dot_edge.format(id(x), id(f))
     for y in f.outputs:
-        txt+=dot_edge.format(id(f),id(y()))#y是weakref
+        txt += dot_edge.format(id(f), id(y()))  # y是weakref
     return txt
 
-def get_dot_var(output,verbose=False):
-    txt=''
-    funcs=[output.creator]
-    txt+=_dot_var(output,verbose)
+
+def get_dot_var(output, verbose=False):
+    txt = ''
+    funcs = [output.creator]
+    txt += _dot_var(output, verbose)
 
     while funcs:
-        func=funcs.pop()
-        txt+=_dot_func(func)
+        func = funcs.pop()
+        txt += _dot_func(func)
         for input in func.inputs:
             txt += _dot_var(input, verbose)
             if input.creator is not None:
                 if input.creator not in funcs:
                     funcs.append(input.creator)
 
-    return 'digraph g{\n'+txt+'}'
+    return 'digraph g{\n' + txt + '}'
 
-def plot_dot_graph(output,verbose=True,to_file='C:\\Users\\85002\\Desktop\\graph.png'):#计算图默认生成在桌面
-    dot_graph=get_dot_var(output,verbose)
 
-    #将dot保存为文件，位置在C:\Uers\85002\.dezer_Cgraph
-    tmp_dir=os.path.join(os.path.expanduser('~'),'.dezero_Cgraph')#获取文件夹路径/.dezero_Cgraph
-    if not os.path.exists(tmp_dir):#若文件夹不在，则创建文件夹
+def plot_dot_graph(output, verbose=True, to_file='C:\\Users\\85002\\Desktop\\graph.png'):  # 计算图默认生成在桌面
+    dot_graph = get_dot_var(output, verbose)
+
+    # 将dot保存为文件，位置在C:\Uers\85002\.dezer_Cgraph
+    tmp_dir = os.path.join(os.path.expanduser('~'), '.dezero_Cgraph')  # 获取文件夹路径/.dezero_Cgraph
+    if not os.path.exists(tmp_dir):  # 若文件夹不在，则创建文件夹
         os.makedirs(tmp_dir)
-    graph_path=os.path.join(tmp_dir,'tmp_graph.dot')#获取创建文件的路径及名称
+    graph_path = os.path.join(tmp_dir, 'tmp_graph.dot')  # 获取创建文件的路径及名称
 
-    with open(graph_path,'w') as f:#创建文件
+    with open(graph_path, 'w') as f:  # 创建文件
         f.write(dot_graph)
 
-    #外部调用dot命令
-    dot_path = r'C:\Program Files\Graphviz\bin\dot.exe'#dot命令的位置
-    extension=os.path.splitext(to_file)[1][1:]#获取拓展名
+    # 外部调用dot命令
+    dot_path = r'C:\Program Files\Graphviz\bin\dot.exe'  # dot命令的位置
+    extension = os.path.splitext(to_file)[1][1:]  # 获取拓展名
     cmd = f'"{dot_path}" "{graph_path}" -T {extension} -o "{to_file}"'
     ''' cmd=C:\\Program Files\\Graphviz\\bin\\dot.exe C:\\Users\\85002\\.dezero_Cgraph\\tmp_graph.dot -T png -o C:\\Users\\85002\\Desktop\\graph.png'''
-    subprocess.run(cmd,shell=True)#终端执行cmd命令
+    subprocess.run(cmd, shell=True)  # 终端执行cmd命令
 
     try:
         from IPython import display
         return display.Image(filename=to_file)
     except:
         pass
+
 
 def sum_to(x, shape):
     """沿轴对元素求和，以输出具有给定形状的数组。
@@ -103,7 +110,8 @@ def sum_to(x, shape):
     axis = tuple([i + lead for i, sx in enumerate(shape) if sx == 1])
     y = x.sum(lead_axis + axis, keepdims=True)
     if lead > 0:
-        y = y.squeeze(lead_axis)
+        y = y.data.squeeze(lead_axis)
+        y = skystar.Variable(y)
     return y
 
 
@@ -136,9 +144,9 @@ def reshape_sum_backward(gy, x_shape, axis, keepdims):
     return gy
 
 
-def cross_entropy_error(y,t):#交叉熵误差，当t为非0-1形式时
+def cross_entropy_error(y, t):  # 交叉熵误差，当t为非0-1形式时
     xp = get_array_module(y)
-    if y.ndim<=2:
+    if y.ndim <= 2:
         if y.ndim == 1:  # 1把一维数据变为一行的二维数据
             y = y.reshape(1, y.size)
             t = t.reshape(1, t.size)
@@ -150,40 +158,42 @@ def cross_entropy_error(y,t):#交叉熵误差，当t为非0-1形式时
         return pt
     else:
         '''这里加入了语义分割模型下，像素级的交叉熵误差'''
-        if y.ndim==3:
-            y=y.reshape(1, y.shape[0], y.shape[1], y.shape[2])
-        batch_size,num_class,H,W=y.shape
-        if t.ndim!=4:
-            t=t.reshape(1, 1,H,W)
+        if y.ndim == 3:
+            y = y.reshape(1, y.shape[0], y.shape[1], y.shape[2])
+        batch_size, num_class, H, W = y.shape
+        if t.ndim != 4:
+            t = t.reshape(1, 1, H, W)
         '''将y变为二维数组，与t变为非0-1形式二维数组'''
-        t=onehot(t,num_class)
-        pt=-xp.sum(t*xp.log(y+1e-7))/H/W/batch_size
+        t = onehot(t, num_class)
+        pt = -xp.sum(t * xp.log(y + 1e-7)) / H / W / batch_size
         return pt
 
-def softmax(x):#Softmax函数,输出层激活函数,用于多维数组
+
+def softmax(x):  # Softmax函数,输出层激活函数,用于多维数组
     xp = get_array_module(x)
-    if x.ndim==2:
-        x = x.T#转置操作，每一列代表一个样本，如果是行的话，广播会出错
-        c = xp.max(x, axis=0)#求出最大值，避免数据溢出
-        x_exp = xp.exp(x-c)#利用了广播，每一列的样本减去相同的值
-        sum=xp.sum(x_exp,axis=0)
-        y=x_exp/sum
+    if x.ndim == 2:
+        x = x.T  # 转置操作，每一列代表一个样本，如果是行的话，广播会出错
+        c = xp.max(x, axis=0)  # 求出最大值，避免数据溢出
+        x_exp = xp.exp(x - c)  # 利用了广播，每一列的样本减去相同的值
+        sum = xp.sum(x_exp, axis=0)
+        y = x_exp / sum
         return y.T
 
-    if x.ndim>2:
+    if x.ndim > 2:
         '''这里加入了语义分割模型下，像素级的softmax分类'''
-        if x.ndim==3:
-            axis=0
+        if x.ndim == 3:
+            axis = 0
         else:
-            axis=1
+            axis = 1
         c = xp.max(x, axis=axis, keepdims=True)
         x_exp = xp.exp(x - c)
         sum = xp.sum(x_exp, axis=axis, keepdims=True)
         y = x_exp / sum
         return y
 
-    x = x - xp.max(x) # 溢出对策
+    x = x - xp.max(x)  # 溢出对策
     return xp.exp(x) / xp.sum(xp.exp(x))
+
 
 # def im2col(input_data, filter_h, filter_w, stride=1, pad=0):
 #     """
@@ -217,7 +227,7 @@ def softmax(x):#Softmax函数,输出层激活函数,用于多维数组
 #     所以为了正确展开，对数据的轴重新排列（N,out_h,out_w,C,filter_h,filter_w）'''
 #     col = col.transpose(0, 4, 5, 1, 2, 3).reshape(N*out_h*out_w, -1)
 #     return col#(N*oh*ow,c*fh*fw)
-def im2col(input_data, filter_h, filter_w, stride=1, pad=0):#一种更加高效的im2col方法
+def im2col(input_data, filter_h, filter_w, stride=1, pad=0):  # 一种更加高效的im2col方法
     xp = get_array_module(input_data)
     N, C, H, W = input_data.shape
     out_h = (H + 2 * pad - filter_h) // stride + 1
@@ -231,8 +241,10 @@ def im2col(input_data, filter_h, filter_w, stride=1, pad=0):#一种更加高效�
     k = xp.tile(xp.arange(out_w), out_h)
     i = i0[:, None] + j[None, :] * stride
     j = i1[:, None] + k[None, :] * stride
-    col = img[:, :, i, j].transpose(0,3,1,2).reshape(N * out_h * out_w, -1)
+    col = img[:, :, i, j].transpose(0, 3, 1, 2).reshape(N * out_h * out_w, -1)
     return col
+
+
 # def col2im(col, input_shape, filter_h, filter_w, stride=1, pad=0):
 #     """
 #     将二维矩阵变为四维图像
@@ -277,6 +289,7 @@ def col2im(col, input_shape, filter_h, filter_w, stride=1, pad=0):
             img[:, :, y:y + out_h * stride:stride, x:x + out_w * stride:stride] += col[:, :, y, x, :, :]
     return img[:, :, pad:H + pad, pad:W + pad]  # 返回裁剪后的图像
 
+
 def pair(x):
     if isinstance(x, int):
         return (x, x)
@@ -285,6 +298,7 @@ def pair(x):
         return x
     else:
         raise ValueError
+
 
 def show_progress(block_num, block_size, total_size):
     bar_template = "\r[{}] {:.2f}%"
@@ -297,8 +311,11 @@ def show_progress(block_num, block_size, total_size):
     bar = "#" * i + "." * (30 - i)
     print(bar_template.format(bar, p), end='')
 
+
 # cache_dir = os.path.join(os.path.expanduser('~'), '.dezero')#'C:\\Users\\85002\\.dezero'
-cache_dir='D:\\Programing\\pythonProject\\Dezero\\train_image'
+cache_dir = 'D:\\Programing\\pythonProject\\Dezero\\train_image'
+
+
 def get_file(url, file_name=None):
     """Download a file from the `url` if it is not in the cache.
 
@@ -333,11 +350,12 @@ def get_file(url, file_name=None):
 
     return file_path
 
-def transconv_pad(x, stride=1, kernel_size=3,pad=0):
+
+def transconv_pad(x, stride=1, kernel_size=3, pad=0):
     '''对x实现边缘填充和中间填充，扩展图像的尺寸'''
     xp = get_array_module(x)
     middle_pad = stride - 1
-    edge_pad = kernel_size - 1-pad#这里说明pad影响了边缘填充
+    edge_pad = kernel_size - 1 - pad  # 这里说明pad影响了边缘填充
     N, C, h, w = x.shape
 
     # 计算中间填充后图像尺寸
@@ -354,10 +372,11 @@ def transconv_pad(x, stride=1, kernel_size=3,pad=0):
     x = xp.pad(mid_demox, [(0, 0), (0, 0), (edge_pad, edge_pad), (edge_pad, edge_pad)], mode='constant')
     return x
 
-def back_transcov_pad(x, stride=1, kernel_size=3,pad=0):
+
+def back_transcov_pad(x, stride=1, kernel_size=3, pad=0):
     '''从反卷积结果中还原原始图像，用于上采样层的反向传播'''
     xp = get_array_module(x)
-    edge_pad = kernel_size - 1-pad
+    edge_pad = kernel_size - 1 - pad
     middle_pad = stride - 1
     N, C, h, w = x.shape
 
@@ -366,8 +385,8 @@ def back_transcov_pad(x, stride=1, kernel_size=3,pad=0):
 
     h, w = x.shape[2], x.shape[3]
     # 计算去除中间填充后的尺寸
-    new_h=int((h+middle_pad)//(1+middle_pad))
-    new_w=int((w+middle_pad)//(1+middle_pad))
+    new_h = int((h + middle_pad) // (1 + middle_pad))
+    new_w = int((w + middle_pad) // (1 + middle_pad))
     out = xp.zeros((N, C, new_h, new_w))
 
     for i in range(new_h):
@@ -376,7 +395,8 @@ def back_transcov_pad(x, stride=1, kernel_size=3,pad=0):
 
     return out
 
-def bilinear_kernel(in_channels, out_channels, kernel_size,xp=np):
+
+def bilinear_kernel(in_channels, out_channels, kernel_size, xp=np):
     '''创建一个双线性内插值的核，用于初始化上采样层的权重'''
     factor = (kernel_size + 1) // 2
     if kernel_size % 2 == 1:
@@ -391,35 +411,37 @@ def bilinear_kernel(in_channels, out_channels, kernel_size,xp=np):
     weight[range(in_channels), range(out_channels), :, :] = filt
     return xp.array(weight)
 
+
 def onehot(x, num_classes):
     '''此函数用于把标签t变为onehot形式'''
-    xp=get_array_module(x)
-    if x.ndim==2:
+    xp = get_array_module(x)
+    if x.ndim == 2:
         '''这里可以扩展一维标签变为onehot形式'''
         pass
-    if x.ndim != 4 and x.ndim!=2:
+    if x.ndim != 4 and x.ndim != 2:
         try:
-            C,H,W = x.shape
+            C, H, W = x.shape
             x = x.reshape(1, C, H, W)
         except ValueError:
-            H,W = x.shape
-            x=x.reshape(1,1,H,W)
+            H, W = x.shape
+            x = x.reshape(1, 1, H, W)
     batch, C, H, W = x.shape
-    x=x.reshape(-1)
-    rex=xp.zeros((x.size,num_classes))
+    x = x.reshape(-1)
+    rex = xp.zeros((x.size, num_classes))
     rex[xp.arange(len(x)), x] = 1
-    rex=rex.reshape(batch,H,W,num_classes)
-    rex=rex.transpose(0,3,1,2)
+    rex = rex.reshape(batch, H, W, num_classes)
+    rex = rex.transpose(0, 3, 1, 2)
     return rex
 
-def accuracy(y,t):
+
+def accuracy(y, t):
     '''
     y:Variable
     t:ndarray
     '''
     with skystar.core.no_grad():
         xp = get_array_module(y)
-        if t.ndim>3:
+        if t.ndim > 3:
             xp = get_array_module(y)
             y = y.data.argmax(axis=1)
             num_classes, H, W = y.shape
@@ -432,17 +454,19 @@ def accuracy(y,t):
             y = xp.argmax(y.data, axis=1)
             sum = t.size
             return xp.sum(y == t) / sum
-def mean_IoU(y,t):
+
+
+def mean_IoU(y, t):
     '''
     y:Variable 预测值 四维
     t:ndarray 真实标签 四维
     '''
     xp = get_array_module(y)
-    if y.data.size!=t.size:
-        y = y.data.argmax(axis=1)#预测标签
+    if y.data.size != t.size:
+        y = y.data.argmax(axis=1)  # 预测标签
     num_classes, H, W = y.shape
     y = y.reshape(num_classes, 1, H, W)
-    unique=xp.unique(t)
+    unique = xp.unique(t)
     iou_list = []
     for i in unique:
         true_positive = xp.sum((t == i) & (y == i))  # 正确分类的总像素
@@ -455,28 +479,34 @@ def mean_IoU(y,t):
             iou = true_positive / denominator
         iou_list.append(iou)
     mean_iou = xp.mean(xp.array(iou_list))  # 计算平均IoU
-    mean_iou=float(mean_iou)
+    mean_iou = float(mean_iou)
     return mean_iou
-def img_norm(x,_range=(0,1)):
+
+
+def img_norm(x, _range=(0, 1)):
     '''
     对单幅图像进行归一化
     :param x: 图像的矩阵，shape：num,C,H,W
     :param _range: 归一化范围
     :return: 返回归一化结果
     '''
-    range_min=_range[0]
-    range_max=_range[1]
-    _max=np.max(x)
-    _min=np.min(x)
-#    _max=np.max(np.max(np.max(x,axis=2,keepdims=True),axis=3,keepdims=True),axis=1,keepdims=True)
-#    _min=np.min(np.min(np.min(x,axis=2,keepdims=True),axis=3,keepdims=True),axis=1,keepdims=True)
-    k=(range_max-range_min)/(_max-_min)
-    x=k * (x - _min)
+    range_min = _range[0]
+    range_max = _range[1]
+    _max = np.max(x)
+    _min = np.min(x)
+    #    _max=np.max(np.max(np.max(x,axis=2,keepdims=True),axis=3,keepdims=True),axis=1,keepdims=True)
+    #    _min=np.min(np.min(np.min(x,axis=2,keepdims=True),axis=3,keepdims=True),axis=1,keepdims=True)
+    k = (range_max - range_min) / (_max - _min)
+    x = k * (x - _min)
     return x
+
+
 def voc_colormap2cmap():
     """将自定义的颜色条转换为 matplotlib 可识别的 ListedColormap"""
     return mcolors.ListedColormap(np.array(VOC_COLORMAP) / 255.0)
-def images_show(data, pad=1,mode='feature',label=None):
+
+
+def images_show(data, pad=1, mode='feature', label=None):
     '''
     :param data: ndarray shape: num,C,H,W
     :param pad: 中间填充数量，用于区分图像，默认为1
@@ -484,6 +514,7 @@ def images_show(data, pad=1,mode='feature',label=None):
     :param label: 图名
     :return: 显示平铺的图形
     '''
+
     def int_square_root(x):
         '''确定x的整数平方根，若无整数平方根，x+1直到能取整数平方根为之'''
         sqrt = np.sqrt(x)
@@ -493,13 +524,15 @@ def images_show(data, pad=1,mode='feature',label=None):
             sqrt = np.sqrt(x)
             y = asif_int(sqrt)
         return int(sqrt)
+
     def asif_int(x):
         '''判断数是否为整数'''
         x = ((x - int(x)) == 0)
         return x
-    def splicing(data,P_num,pad=pad,padnum=255):
+
+    def splicing(data, P_num, pad=pad, padnum=255):
         '''该函数用于将四维的多个图片变为二维矩阵，即将图像二维排列,P_num:排列数'''
-        num, H, W, C = data.shape#原图大小
+        num, H, W, C = data.shape  # 原图大小
         data = data.reshape(P_num, P_num, H, W, C)
         # 按行和列拼接数据，形成完整的图像
         rows = []
@@ -508,86 +541,98 @@ def images_show(data, pad=1,mode='feature',label=None):
                                  axis=1)  # 拼接行data[i, :, :, :, :]取出 i行(x, H_pad, W_pad, C)数据,拼接后的数据降维（H，W，C），可以理解为axis=1在W方向上拼接
             rows.append(row)
         full_image = np.concatenate(rows, axis=0)
-        #给不同图像之间添加分界线用以区别
+        # 给不同图像之间添加分界线用以区别
         H_full, W_full, C = full_image.shape
-        re_img=(np.zeros((H_full+P_num-1,W_full+P_num-1,C))+padnum)
+        re_img = (np.zeros((H_full + P_num - 1, W_full + P_num - 1, C)) + padnum)
         for i in range(P_num):
-            x=i*(H+pad)
+            x = i * (H + pad)
             for j in range(P_num):
-                y=j*(W+pad)
-                re_img[x:x+H,y:y+W,:] = full_image[i*H:i*H+H,j*W:j*W+W,:]
+                y = j * (W + pad)
+                re_img[x:x + H, y:y + W, :] = full_image[i * H:i * H + H, j * W:j * W + W, :]
         return re_img
-    def X_mode_show(feature,label):
-        H,W,C=feature.shape
-        if C==1:#通道为1显示灰度图
+
+    def X_mode_show(feature, label):
+        H, W, C = feature.shape
+        if C == 1:  # 通道为1显示灰度图
             plt.imshow(feature, cmap='gray')
-        else:#真彩色
-            re_img=np.zeros((H_full,W_full,3))
-            re_img[:,:,0]=feature[:,:,0]
-            re_img[:,:,1]=feature[:,:,1]
-            if C==2:re_img[:,:,2]+=255
-            else:re_img[:,:,2]=feature[:,:,2]
+        else:  # 真彩色
+            re_img = np.zeros((H_full, W_full, 3))
+            re_img[:, :, 0] = feature[:, :, 0]
+            re_img[:, :, 1] = feature[:, :, 1]
+            if C == 2:
+                re_img[:, :, 2] += 255
+            else:
+                re_img[:, :, 2] = feature[:, :, 2]
             re_img = np.uint8(re_img)
             plt.imshow(re_img)
         plt.axis('off')
-        plt.title('Feature'+label)
+        plt.title('Feature' + label)
         plt.show()
         return
-    def T_mode_show(feature,label):
-        feature=np.squeeze(feature)
+
+    def T_mode_show(feature, label):
+        feature = np.squeeze(feature)
         unique_labels = np.unique(feature)
-        cmap = voc_colormap2cmap()# 使用自定义的颜色条映射
+        cmap = voc_colormap2cmap()  # 使用自定义的颜色条映射
         # 创建标签与颜色之间的映射
         norm = mcolors.BoundaryNorm(boundaries=np.arange(len(unique_labels) + 1) - 0.5, ncolors=len(unique_labels))
-        plt.imshow(feature, cmap=cmap,norm=norm)
+        plt.imshow(feature, cmap=cmap, norm=norm)
         plt.axis('off')
-        plt.title('Label'+label)
+        plt.title('Label' + label)
         # 显示图像
         plt.show()
-    def Weight_mode_show(feature,label):
-        H,W,C=feature.shape
-        if C==1:#通道为1显示灰度图
+
+    def Weight_mode_show(feature, label):
+        H, W, C = feature.shape
+        if C == 1:  # 通道为1显示灰度图
             plt.imshow(feature, cmap='gray')
         else:
             re_img = np.zeros((H_full, W_full, 3))
-            re_img[:,:,0]=feature[:,:,0]
-            re_img[:,:,1]=feature[:,:,1]
-            if C==2:re_img[:,:,2]+=255
-            else:re_img[:,:,2]=feature[:,:,2]
-            re_img=re_img[:,:,0]*0.2989+re_img[:,:,1]*0.5870+re_img[:,:,2]*0.1140
-            re_img=np.uint8(re_img)
-            plt.imshow(re_img,cmap='gray')
+            re_img[:, :, 0] = feature[:, :, 0]
+            re_img[:, :, 1] = feature[:, :, 1]
+            if C == 2:
+                re_img[:, :, 2] += 255
+            else:
+                re_img[:, :, 2] = feature[:, :, 2]
+            re_img = re_img[:, :, 0] * 0.2989 + re_img[:, :, 1] * 0.5870 + re_img[:, :, 2] * 0.1140
+            re_img = np.uint8(re_img)
+            plt.imshow(re_img, cmap='gray')
         plt.axis('off')
-        plt.title('Feature'+label)
+        plt.title('Feature' + label)
         plt.show()
         return
+
     '''图像预处理'''
-    data=skystar.cuda.as_numpy(data)
-    if mode=='feature' or mode=='weight':
+    data = skystar.cuda.as_numpy(data)
+    if mode == 'feature' or mode == 'weight':
         data = img_norm(data, _range=(0, 255))  # 把数据映射到0~255
-    data=data.astype(np.float32)
+    data = data.astype(np.float32)
     data = data.transpose(0, 2, 3, 1)
 
     '''额外添加图片，满足图像x*x排列'''
     num, H, W, C = data.shape
-    x = int_square_root(num)  #x*x
+    x = int_square_root(num)  # x*x
     if x * x > num:
         add_num = x * x - num
-        new_data = np.zeros((add_num, H, W, C),dtype=np.float32)
-        if mode=='feature' or 'weight':new_data+=255#生成白图
-        elif mode=='label':new_data+=np.max(data)
+        new_data = np.zeros((add_num, H, W, C), dtype=np.float32)
+        if mode == 'feature' or 'weight':
+            new_data += 255  # 生成白图
+        elif mode == 'label':
+            new_data += np.max(data)
         data = np.concatenate((data, new_data), axis=0)
-    full_image = splicing(data,x,pad=pad,padnum=255)#图像填充和拼接
+    full_image = splicing(data, x, pad=pad, padnum=255)  # 图像填充和拼接
 
     '''图像显示'''
-    if label is None:label=''
-    else:label=':'+label
+    if label is None:
+        label = ''
+    else:
+        label = ':' + label
     H_full, W_full, C = full_image.shape
     if mode == 'feature':
-        X_mode_show(full_image,label)
+        X_mode_show(full_image, label)
     elif mode == 'label':
-        T_mode_show(full_image,label)
-    elif mode=='weight':
-        Weight_mode_show(full_image,label)
+        T_mode_show(full_image, label)
+    elif mode == 'weight':
+        Weight_mode_show(full_image, label)
     else:
         print(f'not support mode:{label}')
