@@ -13,6 +13,7 @@ class Node:
         self.generation = generation
         self.node = node
 
+
 class Graph:
     def __init__(self):
         self.nodes = []
@@ -30,10 +31,11 @@ class Graph:
     def set_outputs(self, outputs):
         self.outputs = outputs
 
-#===============================================================
-#将graph保存为onnx
-#===============================================================
-def save_graph(graph, model_name, file_name='Example.onnx',ifsimplify=False):
+
+# ===============================================================
+# 将graph保存为onnx
+# ===============================================================
+def save_graph(graph, model_name, file_name='Example.onnx', ifsimplify=False):
     _graph = make_graph(
         nodes=graph.nodes,
         name=model_name,
@@ -53,21 +55,24 @@ def save_graph(graph, model_name, file_name='Example.onnx',ifsimplify=False):
         print('model saved successfully')
 
 
-#===============================================================
-#载入和使用onnx模型
-#===============================================================
+# ===============================================================
+# 载入和使用onnx模型
+# ===============================================================
 def load_model(model_name):
     session = ort.InferenceSession(model_name)
     return session
+
+
 def model_predict(model, input):
-    input=input.astype(np.float32)
+    input = input.astype(np.float32)
     inputs = {"input": input}
     outputs = model.run('output', inputs)
     return outputs
 
-#===============================================================
-#创建graph
-#===============================================================
+
+# ===============================================================
+# 创建graph
+# ===============================================================
 def create_graph(output):
     graph = Graph()
     fs = [output.creator]
@@ -76,7 +81,8 @@ def create_graph(output):
     nodes = []
     while fs:
         f = fs.pop()
-        graph_node = _graph_node(f, graph)
+        generate_initializers(f, graph)  # 先生成initializers
+        graph_node = _graph_node(f, graph)  # 后生成nodes
         if graph_node.node not in nodes:
             graph.nodes.append(graph_node)
             nodes.append(graph_node.node)
@@ -87,9 +93,10 @@ def create_graph(output):
     graph.nodes = [i.node for i in graph.nodes]
     return graph
 
-#===============================================================
-#根据f的名称调用相应的create函数创建节点
-#===============================================================
+
+# ===============================================================
+# 根据f的名称调用相应的create函数创建节点
+# ===============================================================
 def _graph_node(f, graph):
     name = f.__class__.__name__
     if name in function_nodes:
@@ -97,9 +104,10 @@ def _graph_node(f, graph):
     else:
         print(f'Warning:No such function node: {name}')
 
-#===============================================================
-#生成输入输出的名称，大多数create函数可用
-#===============================================================
+
+# ===============================================================
+# 生成输入输出的名称，大多数create函数可用
+# ===============================================================
 def generate_names(f, graph):
     inputs_name = [input.name + f'_{id(input)}' if input.name is not None else f'mid_{id(input)}' for input in f.inputs]
     if f.generation == 0:
@@ -112,9 +120,19 @@ def generate_names(f, graph):
     return inputs_name, outputs_name
 
 
-#===============================================================
-#create函数，创建Function节点
-#===============================================================
+# ===============================================================
+# 根据函数的输入生成initializers
+# ===============================================================
+def generate_initializers(f, graph):
+    for input in f.inputs:
+        if input.name is not None:
+            graph.initializers.append(
+                make_tensor(input.name + f'_{id(input)}', TensorProto.FLOAT, list(input.shape), input.data))
+
+
+# ===============================================================
+# create函数，创建Function节点
+# ===============================================================
 def create_node(f, graph, node_type, **kwargs):
     inputs_name, outputs_name = generate_names(f, graph)
     node = make_node(
@@ -126,29 +144,40 @@ def create_node(f, graph, node_type, **kwargs):
     )
     return Node(node, f.generation)
 
+
 def create_add_node(f, graph):
     return create_node(f, graph, 'Add')
+
+
+def create_matmul_node(f, graph):
+    return create_node(f, graph, 'MatMul')
+
+
 def create_multify_node(f, graph):
     return create_node(f, graph, 'Mul')
+
+
 def create_relu_node(f, graph):
     return create_node(f, graph, 'Relu')
+
+
 def create_maxpool_node(f, graph):
     return create_node(f, graph, 'MaxPool', kernel_shape=[f.pool_size, f.pool_size],
                        strides=[f.stride, f.stride], pads=[0, 0, f.pad, f.pad])
+
+
 def create_AveragePool_node(f, graph):
     return create_node(f, graph, 'AveragePool', kernel_shape=[f.pool_size, f.pool_size],
                        strides=[f.stride, f.stride], pads=[0, 0, f.pad, f.pad])
+
+
 def create_dropout_node(f, graph):
     return create_node(f, graph, 'Dropout', seed=f.ratio, training_mode=f.training, mask=f.mask)
+
 
 def create_conv_node(f, graph):
     '''需要初始化权重'''
     inputs_name, outputs_name = generate_names(f, graph)
-    graph.initializers.append(make_tensor(f'W_{id(f.inputs[1])}', TensorProto.FLOAT, list(f.inputs[1].shape), f.inputs[1].data))
-    try:
-        graph.initializers.append(make_tensor(f'b_{id(f.inputs[2])}', TensorProto.FLOAT, list(f.inputs[2].shape), f.inputs[2].data))
-    except (AttributeError, IndexError):
-        pass
     node = make_node(
         'Conv',
         inputs_name,
@@ -160,13 +189,9 @@ def create_conv_node(f, graph):
     )
     return Node(node, f.generation)
 
+
 def create_convtranspose_node(f, graph):
     inputs_name, outputs_name = generate_names(f, graph)
-    graph.initializers.append(make_tensor(f'W_{id(f.inputs[1])}', TensorProto.FLOAT, list(f.inputs[1].shape), f.inputs[1].data))
-    try:
-        graph.initializers.append(make_tensor(f'b_{id(f.inputs[2])}', TensorProto.FLOAT, list(f.inputs[2].shape), f.inputs[2].data))
-    except (AttributeError, IndexError):
-        pass
     node = make_node(
         'ConvTranspose',
         inputs_name[:-1],
@@ -178,6 +203,7 @@ def create_convtranspose_node(f, graph):
         name=f'ConvTranspose_node_{id(f)}'
     )
     return Node(node, f.generation)
+
 
 def create_softmaxcrossentropyloss_node(f, graph):
     inputs_name = [f'mid_{id(f.inputs[0])}', 'T']
@@ -194,21 +220,25 @@ def create_softmaxcrossentropyloss_node(f, graph):
     )
     return Node(node, f.generation)
 
-def create_batchnormlization_node(f, graph):
+
+def create_batchNormalization_node(f, graph):
+    'BatchNormalization需要自定义生成initializers'
     inputs_name, outputs_name = generate_names(f, graph)
-    graph.initializers.append(make_tensor(f'scale_{id(f.gamma)}', TensorProto.FLOAT,list(f.gamma.shape),f.gamma))
-    graph.initializers.append(make_tensor(f'B_{id(f.beta)}', TensorProto.FLOAT,list(f.beta.shape),f.beta))
-    graph.initializers.append(make_tensor(f'input_mean_{id(f.test_mean)}', TensorProto.FLOAT, list(f.test_mean.shape), f.test_mean))
-    graph.initializers.append(make_tensor(f'input_var_{id(f.test_var)}', TensorProto.FLOAT, list(f.test_var.shape), f.test_var))
+    graph.initializers.append(make_tensor(f'scale_{id(f.gamma)}', TensorProto.FLOAT, list(f.gamma.shape), f.gamma))
+    graph.initializers.append(make_tensor(f'B_{id(f.beta)}', TensorProto.FLOAT, list(f.beta.shape), f.beta))
+    graph.initializers.append(
+        make_tensor(f'input_mean_{id(f.test_mean)}', TensorProto.FLOAT, list(f.test_mean.shape), f.test_mean))
+    graph.initializers.append(
+        make_tensor(f'input_var_{id(f.test_var)}', TensorProto.FLOAT, list(f.test_var.shape), f.test_var))
     inputs_name.append(f'scale_{id(f.gamma)}')
     inputs_name.append(f'B_{id(f.beta)}')
     inputs_name.append(f'input_mean_{id(f.test_mean)}')
     inputs_name.append(f'input_var_{id(f.test_var)}')
-    if f.training:
-        graph.outputs.append(make_tensor_value_info(f'running_mean_{f.generation}', TensorProto.FLOAT, list(f.test_mean.shape)))
-        graph.outputs.append(make_tensor_value_info(f'running_var_{f.generation}', TensorProto.FLOAT, list(f.test_var.shape)))
-        outputs_name.append(f'running_mean_{f.generation}')
-        outputs_name.append(f'running_var_{f.generation}')
+    if f.training:  # 用于符合onnx的标准，但不必要
+        graph.outputs.append(make_tensor_value_info(f'Mean_{f.generation}', TensorProto.FLOAT, list(f.test_mean.shape)))
+        graph.outputs.append(make_tensor_value_info(f'Var_{f.generation}', TensorProto.FLOAT, list(f.test_var.shape)))
+        outputs_name.append(f'Mean_{f.generation}')
+        outputs_name.append(f'Var_{f.generation}')
     node = make_node(
         'BatchNormalization',
         inputs_name,
@@ -219,31 +249,60 @@ def create_batchnormlization_node(f, graph):
         name=f'BatchNormalization_node_{id(f)}'
     )
     return Node(node, f.generation)
+
+
 def create_sigmoid_node(f, graph):
     pass
+
+
 def create_softmax_node(f, graph):
     pass
+
+
 def create_meansquarederror_node(f, graph):
     pass
-def create_Affine_node(f, graph):
+
+
+def create_gemm_node(f, graph):
     pass
+
+
 def create_Concat_node(f, graph):
-    return create_node(f, graph, 'Concat',axis=f.axis)
-#使用节点的字典
+    return create_node(f, graph, 'Concat', axis=f.axis)
+
+
+def create_Reshape_node(f, graph):
+    inputs_name, outputs_name = generate_names(f, graph)
+    inputs_name.append(f'shape_{id(f.shape)}')
+    graph.initializers.append(
+        make_tensor(f'shape_{id(f.shape)}', TensorProto.INT64, [len(f.outputs[0]().shape)], f.outputs[0]().shape)
+    )
+    node = make_node(
+        'Reshape',
+        inputs_name,
+        outputs_name,
+        name=f'Reshape_node_{id(f)}',
+    )
+    return Node(node, f.generation)
+
+
+# 使用节点的字典
 function_nodes = {
     'SoftmaxCrossEntropyLoss': create_softmaxcrossentropyloss_node,
     'Sigmoid': create_sigmoid_node,
     'Relu': create_relu_node,
     'Softmax': create_softmax_node,
     'MeanSquaredError': create_meansquarederror_node,
-    'Affine': create_Affine_node,
-    'BatchNormalization': create_batchnormlization_node,
+    'Gemm': create_gemm_node,
+    'BatchNormalization': create_batchNormalization_node,
     'Dropout': create_dropout_node,
     'Conv': create_conv_node,
     'ConvTranspose': create_convtranspose_node,
     'MaxPool': create_maxpool_node,
     'Add': create_add_node,
     'Mul': create_multify_node,
+    'Dot': create_matmul_node,
     "Concat": create_Concat_node,
-    "AveragePool":create_AveragePool_node
-    }
+    "AveragePool": create_AveragePool_node,
+    'Reshape': create_Reshape_node
+}

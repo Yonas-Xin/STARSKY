@@ -378,7 +378,7 @@ class Tanh(Function):
         return dout
 def tanh(x):
     return Tanh()(x)
-class Reshape(Function):#
+class Reshape(Function):
     def __init__(self,shape):
         self.shape=shape
     def forward(self,x):
@@ -578,6 +578,7 @@ class Affine(Function):
     x：输入数据，如果输入数据是多维，则先变为2维
     W：参数权重，为二维的Varaible
     b，参数偏置，为一维的Variable
+    affine层可以单纯由dot与add实现
     '''
     def forward(self,x,W,b):
         xp=skystar.cuda.get_array_module(x)
