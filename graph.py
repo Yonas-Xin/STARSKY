@@ -106,7 +106,7 @@ def _graph_node(f, graph):
 
 
 # ===============================================================
-# 生成输入输出的名称，大多数create函数可用
+# 生成输入输出的名称,输入输出是core的Function函数里前向传播的输入输出，大多数create函数可用
 # ===============================================================
 def generate_names(f, graph):
     inputs_name = [input.name + f'_{id(input)}' if input.name is not None else f'mid_{id(input)}' for input in f.inputs]
@@ -121,7 +121,7 @@ def generate_names(f, graph):
 
 
 # ===============================================================
-# 根据函数的输入生成initializers
+# 根据函数的输入生成initializers，如何函数的输入具有name，则将其纳入initializers
 # ===============================================================
 def generate_initializers(f, graph):
     for input in f.inputs:
@@ -284,7 +284,31 @@ def create_Reshape_node(f, graph):
         name=f'Reshape_node_{id(f)}',
     )
     return Node(node, f.generation)
-
+def create_slice_node(f,graph):
+    inputs_name, outputs_name = generate_names(f, graph)
+    inputs_name.append(f'starts_{id(f.starts)}')
+    inputs_name.append(f'ends_{id(f.ends)}')
+    inputs_name.append(f'axis_{id(f.starts)}')
+    inputs_name.append(f'steps_{id(f.steps)}')
+    graph.initializers.append(
+        make_tensor(f'starts_{id(f.starts)}', TensorProto.INT64, [len(f.starts)], f.starts)
+    )
+    graph.initializers.append(
+        make_tensor(f'ends_{id(f.ends)}', TensorProto.INT64, [len(f.ends)], f.ends)
+    )
+    graph.initializers.append(
+        make_tensor(f'axis_{id(f.starts)}', TensorProto.INT64, [len(f.axis)], f.axis)
+    )
+    graph.initializers.append(
+        make_tensor(f'steps_{id(f.steps)}', TensorProto.INT64, [len(f.steps)], f.steps)
+    )
+    node = make_node(
+        'Slice',
+        inputs_name,
+        outputs_name,
+        name=f'Slice_node_{id(f)}',
+    )
+    return Node(node, f.generation)
 
 # 使用节点的字典
 function_nodes = {
@@ -304,5 +328,6 @@ function_nodes = {
     'Dot': create_matmul_node,
     "Concat": create_Concat_node,
     "AveragePool": create_AveragePool_node,
-    'Reshape': create_Reshape_node
+    'Reshape': create_Reshape_node,
+    'Slice': create_slice_node
 }
