@@ -1,4 +1,4 @@
-import skystar.utils
+import skystar.utils as util
 from skystar.layer import *
 from skystar.utils import plot_dot_graph
 from skystar.graph import create_graph,save_graph
@@ -41,8 +41,8 @@ class Model(Layer):
         graph=create_graph(y)
         save_graph(graph,model_name,file_name=path,ifsimplify=ifsimplify)
         return
-    def train(self, train, lr=0.001, epoch=100, test=None, plot=False, plot_rate=0.1, loss_func=skystar.core.softmaxwithloss,
-              accuracy=skystar.utils.accuracy, optimizer=Adam, use_gpu=True, save_model=True,autodecrese=False):
+    def train(self, train, lr=0.001, epoch=300, test=None, plot=False, plot_rate=0.1, loss_func=skystar.core.softmaxwithloss,
+              accuracy=skystar.utils.accuracy, optimizer=Adam, use_gpu=True, save_model=True, autodecrese=False):
         '''
         :param train: 训练数据迭代器，需要dataloader
         :param lr: 学习率，默认为0.001
@@ -117,7 +117,7 @@ class Model(Layer):
         if save_model:
             name = self.__class__.__name__
             print('保存模型参数中......')
-            self.save_weights(path=name)
+            self.save_weights(filename=name)
 
     def test(self, test,use_gpu=True,plot=True,plot_rate=0.1,accuracy=skystar.utils.accuracy):
         print('Test begin：')
@@ -170,6 +170,11 @@ class Sequential(Model):
                 self.num_blocks -= 1
                 return
     def __call__(self,*x,training=True):
+        x=x[0]
+        for layer in self._blocks.values():
+            x=layer(x,training=training)
+        return x
+    def forward(self, x, training=True):
         for layer in self._blocks.values():
             x=layer(x,training=training)
         return x
@@ -530,10 +535,83 @@ class Simple_densenet(Model):
         x=self.transition3(x)
         x=self.affine(x)
         return x
+class U_net(Model):
+    def __init__(self):
+        super().__init__()
+        self.conv1_1=Convolution(16,3,3)
+        self.conv1_2=Convolution(16,3,3)
+        self.pool1=Pooling(2,stride=2)
+        self.conv2_1=Convolution(128,3,3)
+        self.conv2_2=Convolution(128,3,3)
+        self.pool2=Pooling(2,stride=2)
+        self.conv3_1=Convolution(256,3,3)
+        self.conv3_2=Convolution(256,3,3)
+        self.pool3=Pooling(2,stride=2)
+        self.conv4_1=Convolution(512,3,3)
+        self.conv4_2=Convolution(512,3,3)
+        self.pool4=Pooling(2,stride=2)
 
-# x=np.random.random((3,3,224,224))
-# model=Simple_densenet()
+        self.conv5_1=Convolution(512,3,3)
+        self.conv5_2=Convolution(512,3,3)
+        self.transconv1=Transpose_Convolution(512,2,2,stride=2, nobias=True)
+        self.conv6_1=Convolution(512,3,3)
+        self.conv6_2=Convolution(512,3,3)
+        self.transconv2=Transpose_Convolution(256,2,2,stride=2, nobias=True)
+        self.conv7_1=Convolution(256,3,3)
+        self.conv7_2=Convolution(256,3,3)
+        self.transconv3=Transpose_Convolution(128,2,2,stride=2, nobias=True)
+        self.conv8_1=Convolution(128,3,3)
+        self.conv8_2=Convolution(128,3,3)
+        self.transconv4=Transpose_Convolution(16,2,2,stride=2, nobias=True)
+        self.conv9_1=Convolution(16,3,3)
+        self.conv9_2=Convolution(16,3,3)
+
+    def forward(self, x, training=True):
+        x1=ReLU(self.conv1_1(x))#572
+        x1=ReLU(self.conv1_2(x1))#570
+        x1_crop=util.copyandcrop(x1,(392,392))
+
+        x2=self.pool1(x1)#568
+        x2=ReLU(self.conv2_1(x2))#284
+        x2=ReLU(self.conv2_2(x2))#282
+        x2_crop=util.copyandcrop(x2,(200,200))
+
+        x3=self.pool2(x2)#280
+        x3=ReLU(self.conv3_1(x3))#140
+        x3=ReLU(self.conv3_2(x3))#138
+        x3_crop=util.copyandcrop(x3,(104,104))
+
+        x4=self.pool3(x3)#136
+        x4=ReLU(self.conv4_1(x4))#68
+        x4=ReLU(self.conv4_2(x4))#66
+        x4_crop=util.copyandcrop(x4,(56,56))
+
+        x=self.pool4(x4)#64
+        x=ReLU(self.conv5_1(x))#32
+        x=ReLU(self.conv5_2(x))#30
+
+        x=self.transconv1(x)+x4_crop#512 28
+        x=ReLU(self.conv6_1(x))#512 56
+        x=ReLU(self.conv6_2(x))
+
+        x=self.transconv2(x)+x3_crop#512 52
+        x=ReLU(self.conv7_1(x))#256 104
+        x=ReLU(self.conv7_2(x))
+
+        x=self.transconv3(x)+x2_crop#256 100
+        x=ReLU(self.conv8_1(x))#128 200
+        x=ReLU(self.conv8_2(x))
+
+        x=self.transconv4(x)+x1_crop#128 196
+        x=ReLU(self.conv9_1(x))#16 392
+        x=ReLU(self.conv9_2(x))#16 390
+        return x
+
+
+
+x=np.random.random((3,3,572,572))
+model=U_net()
 # y=model(x)
 # y.backward()
-# model.save_to_onnx(x,ifsimplify=False)
+model.save_to_onnx(x)
 
