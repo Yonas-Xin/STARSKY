@@ -140,6 +140,13 @@ class Variable:
         p=str(self.data).replace('\n','\n'+' '*9)
         return 'Variable('+p+')'
 
+    def __getitem__(self, key):
+        # 支持切片读取
+        return self.data[key]
+
+    def __setitem__(self, key, value):
+        # 支持切片赋值
+        self.data[key] = value
     '''重载运算符，实现Variable实例 加减乘除等方式,函数setup_variable也实现了该功能'''
 
 class Parameter(Variable):#创建子集Parameter，用来存储模型的参数
@@ -486,6 +493,61 @@ class Concat(Function):
         return dx0, dx1
 def concat(x0, x1, axis=0):
     return Concat(axis)(x0,x1)
+class Slice(Function):
+    def __init__(self, starts, ends, axis=None, steps=None):
+        """
+        初始化 Slice 函数。
+        :param starts: 一个一维张量，包含每个维度的起始点，如 [0, 0, 1, 1]。
+        :param ends: 一个一维张量，包含每个维度的结束点，如 [1, 3, 3, 3]。
+        :param axis: 一个一维张量，指定 starts 和 ends 应用的轴，如 [0, 1, 2, 3]。
+        :param stride: 一个一维张量，指定每个轴的步长，如 [1, 1, 1, 1]。
+        """
+        self.starts = starts
+        self.ends = ends
+        if axis is None:
+            axis = list(range(len(starts)))  # 默认为所有轴
+        if steps is None:
+            steps = [1] * len(starts)  # 默认为步长为 1
+        self.axis = axis
+        self.steps = steps
+
+    def forward(self, x):
+        """
+        前向计算：对输入张量 x 进行切片。
+        :param x: 输入张量。
+        :return: 切片后的张量。
+        """
+        xp = skystar.cuda.get_array_module(x)
+        self.input_shape = x.shape  # 保存输入形状以便反向传播使用
+        slices = [slice(None)] * len(x.shape)  # 初始化所有维度的切片为 ":" (None)
+        for ax, start, end, step in zip(self.axis, self.starts, self.ends, self.steps):
+            slices[ax] = slice(start, end, step)  # 按指定轴应用切片
+        self.slices = slices  # 保存切片信息供反向传播使用
+        y = x[tuple(slices)]  # 应用切片
+        return y
+
+    def backward(self, dout):
+        """
+        反向传播：将 dout 放回原来的形状，并在非切片部分填充 0。
+        :param dout: 梯度流。
+        :return: 对输入 x 的梯度。
+        """
+        xp = skystar.cuda.get_array_module(dout)
+        dx = xp.zeros(self.input_shape, dtype=dout.dtype)  # 初始化为零的张量，与输入形状相同
+        dx[tuple(self.slices)] = dout  # 将 dout 放回切片位置
+        return dx
+
+def my_slice(x, starts, ends, axis=None, stride=None):
+    """
+    使用自定义 Slice 类的简单接口函数。
+    :param x: 输入张量。
+    :param starts: 一个一维张量，包含每个维度的起始点。
+    :param ends: 一个一维张量，包含每个维度的结束点。
+    :param axis: 一个一维张量，指定 starts 和 ends 应用的轴。
+    :param stride: 一个一维张量，指定每个轴的步长。
+    :return: 切片后的张量。
+    """
+    return Slice(starts, ends, axis, stride)(x)
 
 # =============================================================================
 '''激活函数'''
@@ -730,7 +792,7 @@ class ConvTranspose(Function):
         '''2*2-->填充k=3,s=2,p=0--> 7*7-->标准卷积k=3,s=1,p=0-->5*5
         o' = s(i' - 1) + k-2p ，i'为原输入尺寸，o'为输出尺寸 （s=32,p=16,k=64）适合图像尺寸224*224卷积为7*7的网络反卷积'''
         xp=skystar.cuda.get_array_module(x)#3*3
-        FN, C, FH, FW = Weight.shape
+        FN, FC, FH, FW = Weight.shape
         x=skystar.utils.transconv_pad(x,stride=self.stride,kernel_size=FH,pad=self.pad)#对x进行反卷积的填充，7*7
         reWeight = xp.flip(Weight, axis=(2, 3))  # 对矩阵进行翻转
         N, C, H, W = x.shape
