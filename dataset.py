@@ -115,3 +115,16 @@ class selfdata_starsky(Dataset):
         else:
             x, t = _loaddata(self.filename,split=self.split)
             return x,t
+
+class Sindata(Dataset):
+    def __init__(self,training=True,size=1000):
+        super().__init__(training)
+        self.size=size
+        self.timestep=np.arange(0,size,1)
+        self.Seqdata=np.sin(np.linspace(0,4*np.pi,size))+np.random.normal(-0.025,0.025,size)
+        self.ForPredictData=np.cos(np.linspace(0,4*np.pi,size))
+
+    def prepare(self):
+        if self.training:
+            self.data=self.Seqdata[0:self.size-1]
+            self.label=self.Seqdata[1:self.size]

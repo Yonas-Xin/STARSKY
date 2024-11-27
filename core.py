@@ -34,7 +34,7 @@ class Variable:
         self.grad=None
     def unchain(self):#删除数据与函数的链接
         self.creator=None
-    def unchain_backward(self):
+    def unchain_backward(self):#用于截断时间序列模型的连接（必须使用，不然模型的计算图无限堆叠）
         if self.creator is not None:
             funcs=[self.creator]
             while funcs:
@@ -229,6 +229,9 @@ class Mul(Function):#乘法
         if self.x0_shape != self.x1_shape:
             dout0=skystar.utils.sum_to(dout*x1,self.x0_shape)
             dout1=skystar.utils.sum_to(dout*x0,self.x1_shape)
+        else:
+            dout0 = dout * x1
+            dout1 = dout * x0
         return dout0,dout1
 class Neg(Function):#负数
     def forward(self,x):
@@ -618,6 +621,7 @@ def softmaxwithloss(x,t):
     return SoftmaxCrossEntropyLoss()(x, t)
 
 class MeanSquaredError(Function):
+    "均方误差，多用于时序模型和一些需要精准预测结果的模型"
     def forward(self,x0,x1):
         diff=x0-x1
         y=(diff**2).sum()/len(diff)
@@ -634,30 +638,42 @@ def mean_squared_error(x0,x1):
 # =============================================================================
 '''层函数'''
 # =============================================================================
-class Affine(Function):
+class Gemm(Function):
     '''
+    也叫Affine层
     affine只进行二维矩阵的点积
     x：输入数据，如果输入数据是多维，则先变为2维
     W：参数权重，为二维的Varaible
     b，参数偏置，为一维的Variable
+    transA: 是否对x进行转置
+    transB：是否对权重w进行转置
     affine层可以单纯由dot与add实现
     '''
+    def __init__(self,alpha=1,beta=1,transA=False,transB=False):
+        self.alpha=alpha
+        self.beta=beta
+        self.transA=transA
+        self.transB=transB
     def forward(self,x,W,b):
         xp=skystar.cuda.get_array_module(x)
         self.original_x_shape=x.shape
         x=x.reshape(x.shape[0],-1)
-        y=xp.dot(x,W)+b
+        if self.transA:
+            x=x.T
+        if self.transB:
+            W=W.T
+        y=xp.dot(x,W)*self.alpha+b*self.beta
         return y
     def backward(self,dout):
         x,W,b=self.inputs
         x=x.reshape(x.shape[0],-1)
-        dW=dot(x.T,dout)
-        db=sum(dout,axis=0)
-        dout=dot(dout,W.T)
+        dW=dot(x.T,dout) * self.alpha
+        db=sum(dout,axis=0) * self.beta
+        dout=dot(dout,W.T) * self.alpha
         dout=dout.reshape(*self.original_x_shape)
         return dout,dW,db
-def affine(x,W,b):
-    return Affine()(x,W,b)
+def gemm(x, W, b, alpha=1, beta=1, transA=False, transB=False):
+    return Gemm(alpha,beta,transA,transB)(x,W,b)
 
 class BatchNormalization(Function):
     def __init__(self,gamma=1.0,beta=0,momentum=0.9,training=True):

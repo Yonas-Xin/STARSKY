@@ -68,5 +68,15 @@ class SeqDataloader(Dataloader):
         xp=cuda.cupy if self.gpu else np
         x=xp.array([example[0] for example in batch])
         t=xp.array([example[1] for example in batch])
+
+        #如果数据集是一维，将他们变为二维，每一列为一个批量
+        if x.ndim==1:
+            x=x.reshape(-1,1)
+        if t.ndim==1:
+            t=t.reshape(-1,1)
         self.iteration+=1
         return x,t
+
+    def __len__(self):
+        '''序列数据的长度等于序列长度除以批次，向上取整'''
+        return math.ceil(self.data_size/self.batch_size)

@@ -91,7 +91,7 @@ class Layer:
 
         try:  # 如果系统中断了正在保存的文件，则将文件删除，避免文件不完整
             np.savez_compressed(filename, **array_dict)
-            print(f'参数保存成功！path:{filename}')
+            print(f'Params saved！path:{filename}')
         except (Exception, KeyboardInterrupt) as e:
             if os.path.exists(filename):
                 os.remove(filename)
@@ -183,47 +183,50 @@ class Affine(Layer):
             self.in_size = x.reshape(x.shape[0], -1).shape[1]  # 如果x的维度是四维，那么变形之后取它的shape[1]
             self._init_W(xp)
 
-        # 以下是两种affine的表达方式
-        # y = affine(x, self.W, self.b)
-        x = x.reshape(x.shape[0], -1)
-        y = dot(x, self.W) + self.b
+        if self.b is not None:
+            x = x.reshape(x.shape[0], -1)
+            y = dot(x, self.W) + self.b
+        else:
+            y = dot(x, self.W)
         return y
 
-# class Gemm(Layer):
-#     '''矩阵乘,只需要输入out_size,in_size可根据要传递的x大小自动计算得出'''
-#
-#     def __init__(self, out_size, alpha=1.0, beta=1.0, nobias=False, dtype=np.float32, in_size=None):
-#         super().__init__()
-#         self.name = 'Gemm'
-#         self.in_size = in_size
-#         self.out_size = out_size
-#         self.dtype = dtype
-#         self.alpha = alpha
-#         self.beta = beta
-#
-#         self.W = Parameter(None, name='W')
-#         if self.in_size is not None:
-#             self._init_W()
-#
-#         if nobias:
-#             self.b = None
-#         else:
-#             self.b = Parameter(np.zeros(out_size, dtype=dtype), name='b')
-#
-#     def _init_W(self, xp=np):
-#         I, O = self.in_size, self.out_size
-#         W_data = xp.random.randn(I, O) * xp.sqrt(1 / I)
-#         W_data = W_data.astype(self.dtype)
-#         self.W.data = W_data
-#
-#     def forward(self, x, training=True):
-#         xp = cuda.get_array_module(x)
-#         if self.W.data is None:
-#             self.in_size = x.reshape(x.shape[0], -1).shape[1]  # 如果x的维度是四维，那么变形之后取它的shape[1]
-#             self._init_W(xp)
-#
-#         y = affine(x, self.W, self.b, self.alpha, self.beta)
-#         return y
+class Gemm(Layer):
+    '''矩阵乘,只需要输入out_size,in_size可根据要传递的x大小自动计算得出'''
+
+    def __init__(self, out_size, alpha=1.0, beta=1.0,transA=False, transB=False, nobias=False, dtype=np.float32, in_size=None):
+        super().__init__()
+        self.name = 'Gemm'
+        self.in_size = in_size
+        self.out_size = out_size
+        self.dtype = dtype
+        self.alpha = alpha
+        self.beta = beta
+        self.transA = transA
+        self.transB = transB
+
+        self.W = Parameter(None, name='B')
+        if self.in_size is not None:
+            self._init_W()
+
+        if nobias:
+            self.b = None
+        else:
+            self.b = Parameter(np.zeros(out_size, dtype=dtype), name='C')
+
+    def _init_W(self, xp=np):
+        I, O = self.in_size, self.out_size
+        W_data = xp.random.randn(I, O) * xp.sqrt(1 / I)
+        W_data = W_data.astype(self.dtype)
+        self.W.data = W_data
+
+    def forward(self, x, training=True):
+        xp = cuda.get_array_module(x)
+        if self.W.data is None:
+            self.in_size = x.reshape(x.shape[0], -1).shape[1]  # 如果x的维度是四维，那么变形之后取它的shape[1]
+            self._init_W(xp)
+
+        y = gemm(x, self.W, self.b, self.alpha, self.beta, self.transA, self.transB)
+        return y
 
 # =============================================================================
 # 批量归一块

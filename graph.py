@@ -21,6 +21,8 @@ class Graph:
         self.outputs = []
         self.initializers = []
         self.last_func_id = None
+        self.inputindex=1
+
 
     def add_node(self, node):
         self.nodes.append(node)
@@ -77,7 +79,7 @@ def create_graph(output):
     graph = Graph()
     fs = [output.creator]
     graph.last_func_id = id(fs[0])
-    graph.outputs.append(make_tensor_value_info('Y', TensorProto.FLOAT, list(output.shape)))
+    graph.outputs.append(make_tensor_value_info('Output', TensorProto.FLOAT, list(output.shape)))
     nodes = []
     while fs:
         f = fs.pop()
@@ -111,12 +113,13 @@ def _graph_node(f, graph):
 def generate_names(f, graph):
     inputs_name = [input.name + f'_{id(input)}' if input.name is not None else f'mid_{id(input)}' for input in f.inputs]
     if f.generation == 0:
-        inputs_name[0] = 'X'
-        node = make_tensor_value_info('X', TensorProto.FLOAT, list(f.inputs[0].shape))
+        inputs_name[0] = f'Input{graph.inputindex}'
+        node = make_tensor_value_info(f'Input{graph.inputindex}', TensorProto.FLOAT, list(f.inputs[0].shape))
+        graph.inputindex += 1
         graph.inputs.append(node)
     outputs_name = [f'mid_{id(f.outputs[0]())}']
     if id(f) == graph.last_func_id:
-        outputs_name = ['Y']
+        outputs_name = ['Output']
     return inputs_name, outputs_name
 
 
@@ -126,8 +129,9 @@ def generate_names(f, graph):
 def generate_initializers(f, graph):
     for input in f.inputs:
         if input.name is not None:
-            graph.initializers.append(
-                make_tensor(input.name + f'_{id(input)}', TensorProto.FLOAT, list(input.shape), input.data))
+            initializer=make_tensor(input.name + f'_{id(input)}', TensorProto.FLOAT, list(input.shape), input.data)
+            if initializer not in graph.initializers:
+                graph.initializers.append(initializer)
 
 
 # ===============================================================
@@ -252,7 +256,7 @@ def create_batchNormalization_node(f, graph):
 
 
 def create_sigmoid_node(f, graph):
-    pass
+    return create_node(f, graph, 'Sigmoid')
 
 
 def create_softmax_node(f, graph):
@@ -264,7 +268,7 @@ def create_meansquarederror_node(f, graph):
 
 
 def create_gemm_node(f, graph):
-    pass
+    return create_node(f, graph, 'Gemm', alpha=f.alpha, beta=f.beta, transA=f.transA, transB=f.transB)
 
 
 def create_Concat_node(f, graph):
@@ -310,6 +314,9 @@ def create_slice_node(f,graph):
     )
     return Node(node, f.generation)
 
+def create_tanh_node(f,graph):
+    return create_node(f, graph, 'Tanh')
+
 # 使用节点的字典
 function_nodes = {
     'SoftmaxCrossEntropyLoss': create_softmaxcrossentropyloss_node,
@@ -329,5 +336,6 @@ function_nodes = {
     "Concat": create_Concat_node,
     "AveragePool": create_AveragePool_node,
     'Reshape': create_Reshape_node,
-    'Slice': create_slice_node
+    'Slice': create_slice_node,
+    'Tanh': create_tanh_node
 }
