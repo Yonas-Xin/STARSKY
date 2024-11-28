@@ -4,3 +4,6 @@ sky_dataset/voc2012_test.npz
 sky_dataset/voc2012_train.npz
 model_params/Simple_densenet.onnx
 /dataset_mnist
+*.onnx
+*.npz
+*.onnx
