@@ -30,19 +30,21 @@ class Model(Layer):
             sum = t.size
             return np.sum(y.data == t) / sum
 
-    def save_to_onnx(self, *inputs, name=None, ifsimplify=True):
+    def save_to_onnx(self, *inputs, training=False, name=None, ifsimplify=True):
         '''
         :param inputs: 需要使用一个模型的输入
         :param name:
         :return:
         '''
+        if ifsimplify==True:#如果要简化模型，强制将模型的模式转为测试模式
+            training=False
         model_name = self.__class__.__name__
         if name is None:
             name = model_name + ".onnx"
         self.to_cpu()
         dir = os.path.dirname(os.path.abspath(__file__))
         path = os.path.join(dir, 'model_params', name)
-        y = self.forward(*inputs)
+        y = self.forward(*inputs,training=training)
         graph = create_graph(y)
         save_graph(graph, model_name, file_name=path, ifsimplify=ifsimplify)
         return
@@ -332,7 +334,7 @@ class Simple_CNN(Model):
         self.pooling1 = Pooling(2, stride=2)
         self.convolution2 = Convolution(32, 3, 3)
         self.pooling2 = Pooling(2, stride=2)
-        self.affine = Affine(10)
+        self.affine = Gemm(10)
 
     def forward(self, x, training=True):
         y1 = self.convolution1(x)
@@ -568,12 +570,12 @@ class Simple_ResNet(Model):
     def forward(self, x, training=True):
         x = ReLU(self.conv1(x))
         x = self.pool1(x)
-        x = self.residual1_1(x)
-        x = self.residual1_2(x)
-        x = self.residual2_1(x)
-        x = self.residual2_2(x)
-        x = self.residual3_1(x)
-        x = self.residual3_2(x)
+        x = self.residual1_1(x,training=training)
+        x = self.residual1_2(x,training=training)
+        x = self.residual2_1(x,training=training)
+        x = self.residual2_2(x,training=training)
+        x = self.residual3_1(x,training=training)
+        x = self.residual3_2(x,training=training)
         x = self.affine(x)
         return x
 
