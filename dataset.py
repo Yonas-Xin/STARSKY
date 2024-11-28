@@ -8,7 +8,7 @@ except ImportError:
     print('please check dataset path')
 import os
 class Dataset:
-    def __init__(self,training=True,transform=None,target_transform=None):
+    def __init__(self,training=True,transform=None,target_transform=None, dtype=np.float32):
         self.training=training
         self.transform=transform
         self.target_transform=target_transform
@@ -19,7 +19,11 @@ class Dataset:
         self.data=None
         self.label=None
         self.prepare()
+        self.dtype = dtype
 
+    def set_datatype(self):
+        self.data=self.data.astype(self.dtype)
+        self.label=self.label.astype(self.dtype)
     def __getitem__(self, index):
         if isinstance(index, (int, np.integer)):  # 处理单个标量索引
             if self.label is None:
