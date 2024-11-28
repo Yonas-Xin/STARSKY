@@ -45,7 +45,7 @@ def save_graph(graph, model_name, file_name='Example.onnx', ifsimplify=False):
         outputs=graph.outputs,
         initializer=graph.initializers
     )
-    onnx_model = make_model(graph=_graph)
+    onnx_model = make_model(graph=_graph, opset_imports=[onnx.helper.make_opsetid("", 15)])#指定版本
     check_model(model=onnx_model)
     if ifsimplify:
         model_simplified, check = simplify(onnx_model)
@@ -226,7 +226,9 @@ def create_softmaxcrossentropyloss_node(f, graph):
 
 
 def create_batchNormalization_node(f, graph):
-    'BatchNormalization需要自定义生成initializers'
+    '''BatchNormalization需要自定义生成initializers
+    需要注意的是，由于一些尚未知的版本问题，为了兼容pytorch模型转化，默认batchnorm的运行模式为测试模式，即training_mode=0
+    经过onnxsimplify之后，该层会与conv层融合，因此需要保证使用simplify时，该层处于测试模式，否则简化的模型输出会与原输出有差距'''
     inputs_name, outputs_name = generate_names(f, graph)
     graph.initializers.append(make_tensor(f'scale_{id(f.gamma)}', TensorProto.FLOAT, list(f.gamma.shape), f.gamma))
     graph.initializers.append(make_tensor(f'B_{id(f.beta)}', TensorProto.FLOAT, list(f.beta.shape), f.beta))
@@ -238,18 +240,18 @@ def create_batchNormalization_node(f, graph):
     inputs_name.append(f'B_{id(f.beta)}')
     inputs_name.append(f'input_mean_{id(f.test_mean)}')
     inputs_name.append(f'input_var_{id(f.test_var)}')
-    if f.training:  # 用于符合onnx的标准，但不必要
-        graph.outputs.append(make_tensor_value_info(f'Mean_{f.generation}', TensorProto.FLOAT, list(f.test_mean.shape)))
-        graph.outputs.append(make_tensor_value_info(f'Var_{f.generation}', TensorProto.FLOAT, list(f.test_var.shape)))
-        outputs_name.append(f'Mean_{f.generation}')
-        outputs_name.append(f'Var_{f.generation}')
+    # if f.training:  # 用于符合onnx的标准training==1的情况，但不必要
+    #     graph.outputs.append(make_tensor_value_info(f'Mean_{f.generation}', TensorProto.FLOAT, list(f.test_mean.shape)))
+    #     graph.outputs.append(make_tensor_value_info(f'Var_{f.generation}', TensorProto.FLOAT, list(f.test_var.shape)))
+    #     outputs_name.append(f'Mean_{f.generation}')
+    #     outputs_name.append(f'Var_{f.generation}')
     node = make_node(
         'BatchNormalization',
         inputs_name,
         outputs_name,
         epsilon=1e-5,
         momentum=f.momentum,
-        training_mode=f.training,
+        training_mode=0,#training_mode=f.training,修改成默认为false
         name=f'BatchNormalization_node_{id(f)}'
     )
     return Node(node, f.generation)
@@ -279,12 +281,13 @@ def create_Reshape_node(f, graph):
     inputs_name, outputs_name = generate_names(f, graph)
     inputs_name.append(f'shape_{id(f.shape)}')
     graph.initializers.append(
-        make_tensor(f'shape_{id(f.shape)}', TensorProto.INT64, [len(f.outputs[0]().shape)], f.outputs[0]().shape)
+        make_tensor(f'shape_{id(f.shape)}', TensorProto.INT64, [len(f.shape)], f.shape)
     )
     node = make_node(
         'Reshape',
         inputs_name,
         outputs_name,
+        # allowzero=False,onnx高版本可用
         name=f'Reshape_node_{id(f)}',
     )
     return Node(node, f.generation)
