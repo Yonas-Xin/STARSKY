@@ -43,6 +43,8 @@ class Variable:
                     if x.creator is not None:
                         funcs.append(x.creator)
                         x.unchain()
+
+    '''用于把数据用图像展示，采用了matplotlib的接口'''
     def image_show(self,mode='feature',label=None):
         if self.ndim!=4:
             if self.ndim==3:
@@ -657,7 +659,6 @@ class Gemm(Function):
     def forward(self,x,W,b):
         xp=skystar.cuda.get_array_module(x)
         self.original_x_shape=x.shape
-        x=x.reshape(x.shape[0],-1)
         if self.transA:
             x=x.T
         if self.transB:
@@ -666,7 +667,6 @@ class Gemm(Function):
         return y
     def backward(self,dout):
         x,W,b=self.inputs
-        x=x.reshape(x.shape[0],-1)
         dW=dot(x.T,dout) * self.alpha
         db=sum(dout,axis=0) * self.beta
         dout=dot(dout,W.T) * self.alpha
@@ -676,6 +676,7 @@ def gemm(x, W, b, alpha=1, beta=1, transA=False, transB=False):
     return Gemm(alpha,beta,transA,transB)(x,W,b)
 
 class BatchNormalization(Function):
+    '''batchnorm 均值和方差是针对特征通道计算的，对于二维数据（N,B），特征通道是B，对于（N,C,H,W），特征通道是C'''
     def __init__(self,gamma=1.0,beta=0,momentum=0.9,training=True):
         self.gamma=gamma#ndarray或float
         self.beta=beta#ndarray或float
@@ -690,14 +691,23 @@ class BatchNormalization(Function):
     def forward(self,x):
         xp=skystar.cuda.get_array_module(x)
         if self.test_mean is None:
-            sum = xp.sum(x, axis=0)
-            self.test_mean=xp.zeros_like(sum)
-            self.test_var=xp.zeros_like(sum)
+            self.gamma=xp.array([self.gamma]*x.shape[1]).astype('float32')
+            self.beta=xp.array([self.beta]*x.shape[1]).astype('float32')
+            self.test_mean=xp.zeros(x.shape[1])
+            self.test_var=xp.zeros(x.shape[1])
         if self.training:#训练时用当前批量输入的均值方差
-            sum = xp.sum(x, axis=0)
-            N = x.shape[0]
-            mean = sum / N
-            var = xp.sum((x - mean) ** 2, axis=0) / N
+            if x.ndim==2:
+                sum = xp.sum(x, axis=0)
+                N = x.shape[0]
+                mean = sum / N
+                var = xp.sum((x - mean) ** 2, axis=0) / N
+            elif x.ndim==4:
+                sum = xp.sum(x, axis=(0,2,3))
+                N=x.shape[0]*x.shape[2]*x.shape[3]
+                mean = sum / N
+                var = xp.sum((x - mean.reshape(mean.shape[0],1,1)) ** 2, axis=(0,2,3)) / N
+            else:
+                raise IndexError
             self.mean = mean
             self.var = var
             '''更新全局均值方差，用于测试用'''
@@ -706,19 +716,42 @@ class BatchNormalization(Function):
         else:#测试用全局均值方差
             mean=self.test_mean
             var=self.test_var
-        self.xv = (x - mean) / xp.sqrt(var + 1e-7)
-        y = self.gamma * self.xv + self.beta
-        return y
+        if x.ndim==4:
+            x=x.transpose(0,2,3,1)
+            self.xv = ((x - mean) / xp.sqrt(var + 1e-7))
+            y = self.gamma * self.xv + self.beta
+
+            self.xv=self.xv.transpose(0,3,1,2)
+            y=y.transpose(0,3,1,2)
+            return y
+        if x.ndim==2:
+            self.xv = (x - mean) / xp.sqrt(var + 1e-7)
+            y = self.gamma * self.xv + self.beta
+            return y
     def backward(self,dout):
         xp=skystar.cuda.get_array_module(dout)
         x=self.inputs[0]#Variable
-        N=dout.shape[0]#ndarray
-        dgamma=sum(dout*self.xv,axis=0)#Variable
-        dbeta=sum(dout,axis=0)#Variable
-        dxv=dout*self.gamma#Variable
-        dvar=sum(dxv*(x-self.mean)*xp.power(self.var + 1e-7, -1.5)*(-0.5),axis=0)#Variable
-        dmean=-1.0*sum(dxv,axis=0)/xp.sqrt(self.var+1e-7)+dvar*sum(-2.0*(x-self.mean),axis=0)/N#Variable
-        dx=dxv/xp.sqrt(self.var+1e-7)+dvar*2*(x-self.mean)/N+dmean/N#Variable
+        if x.ndim==2:
+            N=dout.shape[0]#ndarray
+            dgamma=sum(dout*self.xv,axis=0)#Variable
+            dbeta=sum(dout,axis=0)#Variable
+            dxv=dout*self.gamma#Variable
+            dvar=sum(dxv*(x-self.mean)*xp.power(self.var + 1e-7, -1.5)*(-0.5),axis=0)#Variable
+            dmean=-1.0*sum(dxv,axis=0)/xp.sqrt(self.var+1e-7)+dvar*sum(-2.0*(x-self.mean),axis=0)/N#Variable
+            dx=dxv/xp.sqrt(self.var+1e-7)+dvar*2*(x-self.mean)/N+dmean/N#Variable
+        else:
+            N=dout.shape[0]*dout.shape[2]*dout.shape[3]
+            dgamma=sum(dout*self.xv,axis=(0,2,3))
+            dbeta=sum(dout,axis=(0,2,3))
+
+            dout=dout.transpose(0,2,3,1)
+            x=x.transpose(0,2,3,1)
+            dxv=dout*self.gamma
+
+            dvar=sum(dxv*(x-self.mean)*xp.power(self.var + 1e-7, -1.5)*(-0.5),axis=(0,1,2))#Variable
+            dmean=-1.0*sum(dxv,axis=(0,1,2))/xp.sqrt(self.var+1e-7)+dvar*sum(-2.0*(x-self.mean),axis=(0,1,2))/N#Variable
+            dx=dxv/xp.sqrt(self.var+1e-7)+dvar*2*(x-self.mean)/N+dmean/N#Variable
+            dx=dx.transpose(0,3,1,2)
         self.gamma-=0.01*dgamma.data
         self.beta-=0.01*dbeta.data
         return dx
