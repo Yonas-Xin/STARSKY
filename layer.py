@@ -104,7 +104,7 @@ class Layer:
         if not os.path.exists(filename):  # 如果不存在该文件，直接结束函数
             print('权重文件不存在，请训练网络！')
             return
-        npz = np.load(filename)
+        npz = np.load(filename,allow_pickle=True)
         params_dict = {}
         self._flatten_params(params_dict)
         if '_blocks' in params_dict:
@@ -173,7 +173,7 @@ class Affine(Layer):
 
     def _init_W(self, xp=np):
         I, O = self.in_size, self.out_size
-        W_data = xp.random.randn(I, O) * xp.sqrt(1 / I)
+        W_data = xp.random.randn(I, O) * xp.sqrt(1 / I).astype(self.dtype)
         W_data = W_data.astype(self.dtype)
         self.W.data = W_data
 
@@ -183,8 +183,8 @@ class Affine(Layer):
             self.in_size = x.reshape(x.shape[0], -1).shape[1]  # 如果x的维度是四维，那么变形之后取它的shape[1]
             self._init_W(xp)
 
+        x = x.reshape(x.shape[0], -1)
         if self.b is not None:
-            x = x.reshape(x.shape[0], -1)
             y = dot(x, self.W) + self.b
         else:
             y = dot(x, self.W)
@@ -193,7 +193,8 @@ class Affine(Layer):
 class Gemm(Layer):
     '''矩阵乘,只需要输入out_size,in_size可根据要传递的x大小自动计算得出'''
 
-    def __init__(self, out_size, alpha=1.0, beta=1.0,transA=False, transB=False, nobias=False, dtype=np.float32, in_size=None):
+    def __init__(self, out_size, alpha=1.0, beta=1.0,transA=False, transB=False, nobias=False,
+                 dtype=np.float32, in_size=None):
         super().__init__()
         self.name = 'Gemm'
         self.in_size = in_size
@@ -225,11 +226,12 @@ class Gemm(Layer):
             self.in_size = x.reshape(x.shape[0], -1).shape[1]  # 如果x的维度是四维，那么变形之后取它的shape[1]
             self._init_W(xp)
 
+        x = x.reshape(x.shape[0], -1)#如果是四维数据，转变为二维
         y = gemm(x, self.W, self.b, self.alpha, self.beta, self.transA, self.transB)
         return y
 
 # =============================================================================
-# 批量归一块
+# 批量归一化
 # =============================================================================
 class BatchNorm(Layer):
     '''self.test_mean,self.test_var:储存全局均值和方差用于模型预测阶段，如果training为True，每次运行forward，数据会更新'''
@@ -240,7 +242,7 @@ class BatchNorm(Layer):
         self.batchnorm_func = BatchNormalization(gamma=gamma, beta=beta, momentum=momentum)
 
     def forward(self, x, training=True):
-        self.batchnorm_func.train = training
+        self.batchnorm_func.training = training
         x = self.batchnorm_func(x)
         return x
 

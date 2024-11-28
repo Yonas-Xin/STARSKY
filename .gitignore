@@ -7,3 +7,4 @@ model_params/Simple_densenet.onnx
 *.onnx
 *.npz
 *.onnx
+*.onnx
