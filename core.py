@@ -8,6 +8,19 @@ try:
 except ImportError:
     array_types=(np.ndarray)
 
+TrainingMode = True
+def Set_TrainingMode(mode: bool):
+    if not isinstance(mode, bool):
+        raise ValueError("Mode must be a boolean value (True or False).")
+    global TrainingMode
+    TrainingMode = mode
+    if TrainingMode:
+        print('========Setting mode to Training========')
+    else:
+        print('========Setting mode to Testing========')
+def Get_TrainingMode():
+    return TrainingMode
+
 class Variable:
     '''--------
     data：输入数据，仅支持ndarray结构
@@ -25,7 +38,6 @@ class Variable:
         self.grad=None
         self.creator=None
         self.generation=0
-
     '''为每个数据连接函数并辈分'''
     def set_creator(self,func):
         self.creator=func
@@ -43,7 +55,6 @@ class Variable:
                     if x.creator is not None:
                         funcs.append(x.creator)
                         x.unchain()
-
     '''用于把数据用图像展示，采用了matplotlib的接口'''
     def image_show(self,mode='feature',label=None):
         if self.ndim!=4:
@@ -499,33 +510,28 @@ class Concat(Function):
 def concat(x0, x1, axis=0):
     return Concat(axis)(x0,x1)
 class Slice(Function):
-    def __init__(self, starts, ends, axis=None, steps=None):
+    def __init__(self):
         """
-        初始化 Slice 函数。
+        初始化 Slice 函数。输入可谓list 也可为array
         :param starts: 一个一维张量，包含每个维度的起始点，如 [0, 0, 1, 1]。
         :param ends: 一个一维张量，包含每个维度的结束点，如 [1, 3, 3, 3]。
         :param axis: 一个一维张量，指定 starts 和 ends 应用的轴，如 [0, 1, 2, 3]。
         :param stride: 一个一维张量，指定每个轴的步长，如 [1, 1, 1, 1]。
         """
-        self.starts = starts
-        self.ends = ends
-        if axis is None:
-            axis = list(range(len(starts)))  # 默认为所有轴
-        if steps is None:
-            steps = [1] * len(starts)  # 默认为步长为 1
-        self.axis = axis
-        self.steps = steps
+        # self.starts = starts
+        # self.ends = ends
+        # self.axis = axis
+        # self.steps = steps
 
-    def forward(self, x):
+    def forward(self, x, starts, ends, axis, steps):
         """
         前向计算：对输入张量 x 进行切片。
         :param x: 输入张量。
         :return: 切片后的张量。
         """
-        xp = skystar.cuda.get_array_module(x)
         self.input_shape = x.shape  # 保存输入形状以便反向传播使用
         slices = [slice(None)] * len(x.shape)  # 初始化所有维度的切片为 ":" (None)
-        for ax, start, end, step in zip(self.axis, self.starts, self.ends, self.steps):
+        for ax, start, end, step in zip(axis, starts, ends, steps):
             slices[ax] = slice(start, end, step)  # 按指定轴应用切片
         self.slices = slices  # 保存切片信息供反向传播使用
         y = x[tuple(slices)]  # 应用切片
@@ -542,7 +548,7 @@ class Slice(Function):
         dx[tuple(self.slices)] = dout  # 将 dout 放回切片位置
         return dx
 
-def my_slice(x, starts, ends, axis=None, stride=None):
+def my_slice(x, starts, ends, axis, steps):
     """
     使用自定义 Slice 类的简单接口函数。
     :param x: 输入张量。
@@ -552,7 +558,7 @@ def my_slice(x, starts, ends, axis=None, stride=None):
     :param stride: 一个一维张量，指定每个轴的步长。
     :return: 切片后的张量。
     """
-    return Slice(starts, ends, axis, stride)(x)
+    return Slice()(x,starts, ends, axis, steps)
 
 # =============================================================================
 '''激活函数'''
@@ -677,9 +683,7 @@ def gemm(x, W, b, alpha=1, beta=1, transA=False, transB=False):
 
 class BatchNormalization(Function):
     '''batchnorm 均值和方差是针对特征通道计算的，对于二维数据（N,B），特征通道是B，对于（N,C,H,W），特征通道是C'''
-    def __init__(self,gamma=1.0,beta=0,momentum=0.9,training=True):
-        self.gamma=gamma#ndarray或float
-        self.beta=beta#ndarray或float
+    def __init__(self,momentum=0.9):
         self.momentum=momentum#float
         self.xv=None#ndarray
         self.var=None#ndarray
@@ -687,15 +691,11 @@ class BatchNormalization(Function):
 
         self.test_mean=None#ndarray
         self.test_var=None#ndarray
-        self.training=training
-    def forward(self,x):
+    def forward(self,x,gamma,beta,input_mean,input_var):
         xp=skystar.cuda.get_array_module(x)
-        if self.test_mean is None:
-            self.gamma=xp.array([self.gamma]*x.shape[1]).astype('float32')
-            self.beta=xp.array([self.beta]*x.shape[1]).astype('float32')
-            self.test_mean=xp.zeros(x.shape[1])
-            self.test_var=xp.zeros(x.shape[1])
-        if self.training:#训练时用当前批量输入的均值方差
+        self.test_mean=input_mean
+        self.test_var=input_var
+        if Get_TrainingMode():#训练时用当前批量输入的均值方差
             if x.ndim==2:
                 sum = xp.sum(x, axis=0)
                 N = x.shape[0]
@@ -719,23 +719,23 @@ class BatchNormalization(Function):
         if x.ndim==4:
             x=x.transpose(0,2,3,1)
             self.xv = ((x - mean) / xp.sqrt(var + 1e-7))
-            y = self.gamma * self.xv + self.beta
+            y = gamma * self.xv + beta
 
             self.xv=self.xv.transpose(0,3,1,2)
             y=y.transpose(0,3,1,2)
             return y
         if x.ndim==2:
             self.xv = (x - mean) / xp.sqrt(var + 1e-7)
-            y = self.gamma * self.xv + self.beta
+            y = gamma * self.xv + beta
             return y
     def backward(self,dout):
         xp=skystar.cuda.get_array_module(dout)
-        x=self.inputs[0]#Variable
+        x,gamma,beta=self.inputs[0],self.inputs[1],self.inputs[2]#Variable
         if x.ndim==2:
             N=dout.shape[0]#ndarray
             dgamma=sum(dout*self.xv,axis=0)#Variable
             dbeta=sum(dout,axis=0)#Variable
-            dxv=dout*self.gamma#Variable
+            dxv=dout*gamma#Variable
             dvar=sum(dxv*(x-self.mean)*xp.power(self.var + 1e-7, -1.5)*(-0.5),axis=0)#Variable
             dmean=-1.0*sum(dxv,axis=0)/xp.sqrt(self.var+1e-7)+dvar*sum(-2.0*(x-self.mean),axis=0)/N#Variable
             dx=dxv/xp.sqrt(self.var+1e-7)+dvar*2*(x-self.mean)/N+dmean/N#Variable
@@ -746,25 +746,21 @@ class BatchNormalization(Function):
 
             dout=dout.transpose(0,2,3,1)
             x=x.transpose(0,2,3,1)
-            dxv=dout*self.gamma
+            dxv=dout*gamma
 
             dvar=sum(dxv*(x-self.mean)*xp.power(self.var + 1e-7, -1.5)*(-0.5),axis=(0,1,2))#Variable
             dmean=-1.0*sum(dxv,axis=(0,1,2))/xp.sqrt(self.var+1e-7)+dvar*sum(-2.0*(x-self.mean),axis=(0,1,2))/N#Variable
             dx=dxv/xp.sqrt(self.var+1e-7)+dvar*2*(x-self.mean)/N+dmean/N#Variable
             dx=dx.transpose(0,3,1,2)
-        self.gamma-=0.01*dgamma.data
-        self.beta-=0.01*dbeta.data
-        return dx
-
+        return dx,dgamma,dbeta
 class Dropout(Function):
     '''训练时随机删除神经元节点，有效避免过拟合'''
-    def __init__(self,ratio=0.5,training=True):
+    def __init__(self,ratio=0.5):
         self.ratio=ratio
         self.mask=None
-        self.training=training
     def forward(self,x):
         xp=skystar.cuda.get_array_module(x)
-        if self.training:
+        if Get_TrainingMode():
             rand = xp.random.rand(*x.shape)  # 生成与x形状相同的随机数
             self.mask = (rand < self.ratio)
             y = x.copy()
@@ -776,8 +772,8 @@ class Dropout(Function):
     def backward(self, dout):
          dout.data[self.mask]=0
          return dout
-def dropout(x,ratio=0.5,training=True):
-    return Dropout(ratio=ratio,training=training)(x)
+def dropout(x,ratio=0.5):
+    return Dropout(ratio=ratio)(x)
 
 # =============================================================================
 '''卷积网络层函数'''
@@ -785,8 +781,8 @@ def dropout(x,ratio=0.5,training=True):
 class Conv(Function):
     '''
     卷积层
-    W：Variable,四维shape(FN,C,FH,FW)
-    B：Variable,一维shape(FN,)
+    W：Variable,四维shape(out_channel,in_channel,FH,FW)
+    B：Variable,一维shape(out_channel,)
     stride:步长
     pad:填充
     to_affine:如果下一层是affine层，将输出调整为矩阵，而不是四维张量
@@ -840,10 +836,13 @@ class ConvTranspose(Function):
     def forward(self,x,Weight,b):
         '''2*2-->填充k=3,s=2,p=0--> 7*7-->标准卷积k=3,s=1,p=0-->5*5
         o' = s(i' - 1) + k-2p ，i'为原输入尺寸，o'为输出尺寸 （s=32,p=16,k=64）适合图像尺寸224*224卷积为7*7的网络反卷积'''
+        '''注意，ConvTranspose的权重形状为（in_channels,out_channels,H,W）
+        输入为（N,in_channels,H，W）,因此需要对权重进行轴的调换'''
         xp=skystar.cuda.get_array_module(x)#3*3
-        FN, FC, FH, FW = Weight.shape
+        Weight=Weight.transpose(1,0,2,3)
+        out_channel, in_channel, FH, FW = Weight.shape
+        reWeight = xp.flip(Weight, axis=(2, 3))  # 对权重矩阵进行翻转
         x=skystar.utils.transconv_pad(x,stride=self.stride,kernel_size=FH,pad=self.pad)#对x进行反卷积的填充，7*7
-        reWeight = xp.flip(Weight, axis=(2, 3))  # 对矩阵进行翻转
         N, C, H, W = x.shape
         self.shape=x.shape
 
@@ -851,23 +850,24 @@ class ConvTranspose(Function):
         out_h=int((H+2*0-FH)//1+1)#5
         out_w=int((W+2*0-FW)//1+1)#5
         self.col=skystar.utils.im2col(x,FH,FW,stride=1,pad=0)#shape(N*oh*ow, c*fh*fw)
-        self.col_W=reWeight.reshape(FN,-1).T#shape(c*fh*fw,FN)
+        self.col_W=reWeight.reshape(out_channel,-1).T#shape(c*fh*fw,out_channel)
         out=xp.dot(self.col, self.col_W)
         if b is not None:
             out += b  # shape(N*oh*ow,FN)
-        out=out.reshape(N,out_h,out_w,-1).transpose(0,3,1,2)#shape(N,FN,oh,ow)5*5
+        out=out.reshape(N,out_h,out_w,-1).transpose(0,3,1,2)#shape(N,out_channel,oh,ow)5*5
 
         return out
     def backward(self,dout):
         x,W,b=self.inputs[0],self.inputs[1],self.inputs[2]#这里的W是Variable实例
         xp = skystar.cuda.get_array_module(x)
-        FN, C, FH, FW = W.shape
-        dout = dout.transpose(0, 2, 3, 1).reshape(-1, FN)#(N*oh*ow,FN)
+        W=W.transpose(1,0,2,3)
+        out_channel, in_channel, FH, FW = W.shape
+        dout = dout.transpose(0, 2, 3, 1).reshape(-1, out_channel)#(N*oh*ow,out_channel)
 
         if b is not None:
             b.grad = sum(dout, axis=0)  # (FN,)
-        W.grad = dot(self.col.T, dout).transpose(1, 0).reshape(FN, C, FH, FW)#这里得到的梯度是翻转后W的梯度，因此梯度需要翻转
-        W.grad.data=xp.flip(W.grad.data,axis=(2,3))#将W的梯度进行翻转
+        W.grad = dot(self.col.T, dout).transpose(1, 0).reshape(out_channel, in_channel, FH, FW)#这里得到的梯度是翻转后W的梯度，因此梯度需要翻转
+        W.grad.data = xp.flip(W.grad.data.transpose(1, 0, 2, 3), axis=(2, 3))
 
         dcol = dot(dout, self.col_W.T)#Variable(N*oh*ow,c*fh*fw)
         dx = skystar.utils.col2im(dcol.data, self.shape, FH, FW, stride=1,pad=0)#shape(N,C,H,W)
