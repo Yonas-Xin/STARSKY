@@ -1,7 +1,7 @@
 import os
 import subprocess
 import urllib.request
-import skystar.core
+import skystar
 from skystar.cuda import get_array_module
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
@@ -407,7 +407,7 @@ def bilinear_kernel(in_channels, out_channels, kernel_size, xp=np):
           xp.arange(kernel_size).reshape(1, -1))
     filt = (1 - xp.abs(og[0] - center) / factor) * \
            (1 - xp.abs(og[1] - center) / factor)
-    weight = xp.zeros((out_channels, in_channels, kernel_size, kernel_size))
+    weight = xp.zeros((in_channels, out_channels, kernel_size, kernel_size))
     weight[:] = filt
     return xp.array(weight)
 
@@ -636,21 +636,3 @@ def images_show(data, pad=1, mode='feature', label=None):
         Weight_mode_show(full_image, label)
     else:
         print(f'not support mode:{label}')
-def copyandcrop(data,cropsize):
-    N,C,H,W = data.shape
-    crop_h, crop_w = cropsize
-    cropmid_h=int(crop_h/2)
-    cropmid_w=int(crop_w/2)
-    mid_h=H//2
-    mid_w=W//2
-
-    min_h=mid_h-cropmid_h
-    min_w=mid_w-cropmid_w
-    max_h = mid_h + cropmid_h
-    max_w = mid_w + cropmid_w
-    if crop_h%2>0:
-        max_h+=1
-    if crop_w%2>0:
-        max_w+=1
-    return skystar.core.my_slice(data,[0,0,min_h,min_w],[N,C,max_h,max_w])
-    # return skystar.Variable(data[:,:,min_h:max_h,min_w:max_w],name="CopyAndCrop")

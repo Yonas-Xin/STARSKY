@@ -9,42 +9,46 @@ import time
 
 # =============================================================================
 '''model类（继承自Layer）'''
-
-
 # =============================================================================
 class Model(Layer):
     def plot(self, *inputs):
         y = self.forward(*inputs)
         plot_dot_graph(y)
 
-    def predict(self, *inputs, training=True):
-        y = self.forward(*inputs, training=training)
+    def predict(self, *inputs):
+        y = self.forward(*inputs)
         return y
 
-    def accuracy(self, x_test, t, training=True):
+    def __repr__(self):
+        info='----------'+self.__class__.__name__+'----------\n'
+        for layername in self._layers:
+            layer=self.__dict__[layername]
+            info+=layer.__repr__()+'\n'
+        return info
+
+    def accuracy(self, x_test, t):
         with no_grad():
-            y = self.predict(x_test, training=training)
+            y = self.predict(x_test)
             if t.ndim == 2:
                 t = np.argmax(t, axis=1)
             y.data = np.argmax(y.data, axis=1)
             sum = t.size
             return np.sum(y.data == t) / sum
 
-    def save_to_onnx(self, *inputs, training=False, name=None, ifsimplify=True):
+    def save_to_onnx(self, input, name=None, ifsimplify=True):
         '''
-        :param inputs: 需要使用一个模型的输入
+        :param input: 需要使用一个模型的输入
         :param name:
         :return:
         '''
-        if ifsimplify==True:#如果要简化模型，强制将模型的模式转为测试模式
-            training=False
         model_name = self.__class__.__name__
         if name is None:
             name = model_name + ".onnx"
-        self.to_cpu()
+        self.to_cpu()#把模型数据和输入全部变为np.array
+        input = skystar.cuda.as_numpy(input)
         dir = os.path.dirname(os.path.abspath(__file__))
         path = os.path.join(dir, 'model_params', name)
-        y = self.forward(*inputs,training=training)
+        y = self.forward(input)
         graph = create_graph(y)
         save_graph(graph, model_name, file_name=path, ifsimplify=ifsimplify)
         return
@@ -76,6 +80,8 @@ class Model(Layer):
         self.list = [[], [], []]
         optimizer = optimizer(lr).setup(self)
         for i in range(epoch):
+            if not Get_TrainingMode():
+                Set_TrainingMode(True)
             if i % int(epoch // 2) == 0 and autodecrese:
                 '''后期训练把学习率降低'''
                 lr = lr / 10
@@ -86,7 +92,7 @@ class Model(Layer):
             time.sleep(0.1)  # 停顿0.1秒，避免输出条与输出字符串同步
             # 使用 tqdm 包裹训练数据集
             for x, t in tqdm(train, desc='Training', total=len(train) / train.batch_size):
-                y = self(x, training=True)
+                y = self(x)
                 loss = loss_func(y, t)
                 self.cleangrads()
                 loss.backward()
@@ -104,12 +110,14 @@ class Model(Layer):
             time.sleep(0.1)  # 停顿0.1秒，避免输出条与输出字符串同步
             # 如果输入了测试集，则进行网络测试
             if test is not None:
+                if Get_TrainingMode():
+                    Set_TrainingMode(False)
                 sum_acc = 0.0
                 num = 1 * test.batch_size
                 plot_num = int(plot_rate * len(test))
                 with skystar.core.no_grad():
                     for x, t in tqdm(test, desc='Testing', total=len(test) // test.batch_size):
-                        y = self(x, training=False)
+                        y = self(x)
                         if accuracy is not None:
                             sum_acc += accuracy(y, t) * len(t)
                         if num % plot_num == 0 and plot:
@@ -128,6 +136,7 @@ class Model(Layer):
             self.save_weights(filename=name)
 
     def test(self, test, use_gpu=True, plot=True, plot_rate=0.1, accuracy=skystar.utils.accuracy):
+        Set_TrainingMode(False)
         print('Test begin：')
         if use_gpu:
             print('GPU is available, and all parameters are converted to cp.ndarray')
@@ -139,7 +148,7 @@ class Model(Layer):
         plot_num = int(plot_rate * len(test))
         with skystar.core.no_grad():
             for x, t in tqdm(test, desc='Testing', total=len(test) // test.batch_size):
-                y = self(x, training=False)
+                y = self(x)
                 if accuracy is not None:
                     sum_acc += accuracy(y, t) * len(t)
                 if num % plot_num == 0 and plot:
@@ -154,6 +163,7 @@ class Model(Layer):
     def TrainForSeq(self, train, test=None, lr=0.001, epoch=300, BPTT=30,loss_func=skystar.core.mean_squared_error,
                     optimizer=Adam, use_gpu=True, save_model=True, autodecrese=False, leave=True, sleep=False):
         '''专门用于序列模型的训练函数'''
+        Set_TrainingMode(True)
         print('Training begin：')
         if use_gpu:
             print('GPU is available, and all parameters are converted to cp.ndarray')
@@ -175,7 +185,7 @@ class Model(Layer):
             if sleep:
                 time.sleep(0.1)  # 停顿0.1秒，避免输出条与输出字符串同步
             for x, t in tqdm(train, desc='Training', total=len(train), leave=leave):
-                y=self(x, training=True)
+                y=self(x)
                 loss+=loss_func(y, t)
                 count+=1
                 if count%BPTT == 0 or count == len(train):
@@ -194,51 +204,26 @@ class Model(Layer):
 
 # =============================================================================
 '''使用Sequential类自由组合block，打造model。自由生成的Sequential可以使用Model的所有函数'''
-
-
 # =============================================================================
 class Sequential(Model):
     def __init__(self):
         super().__init__()
-        '''_blocks里的block序号从1开始'''
-        self._blocks = OrderedDict()
-        self.num_blocks = 0
 
-    def add(self, layers):
-        '''传入一个block或者包含多个block的元组'''
-        if isinstance(layers, tuple):
-            for layer in layers:
-                self.num_blocks += 1
-                self._blocks[layer.name + f'_{self.num_blocks}'] = layer
-        self.num_blocks += 1
-        self._blocks[layers.name + f'_{self.num_blocks}'] = layers
-
-    def delete(self, index=None):
-        if index is None:
-            index = self.num_blocks
-            self.num_blocks -= 1
-        for i in range(1, len(self._blocks) + 1):
-            if i == index:
-                del self._blocks[i]
-                self.num_blocks -= 1
-                return
-
-    def __call__(self, *x, training=True):
-        x = x[0]
-        for layer in self._blocks.values():
-            x = layer(x, training=training)
+    def forward(self,x):
+        for layername in self._layers:
+            layer = self.__dict__[layername]
+            x = layer(x)
         return x
 
-    def forward(self, x, training=True):
-        for layer in self._blocks.values():
-            x = layer(x, training=training)
-        return x
+    def CreateModel(self,model):
+        for layername in model._layers:
+            layer = model.__dict__[layername]
+            self.__setattr__(layername,layer)
+
 
 
 # =============================================================================
 '''一些经典的model'''
-
-
 # =============================================================================
 class MLP(Model):
     '''fc_output_sizes：tuple，输入层的神经元个数，全连接层神经网络'''
@@ -253,7 +238,7 @@ class MLP(Model):
             setattr(self, 'l' + str(i), layer)
             self.layers.append(layer)
 
-    def forward(self, x, training=True):
+    def forward(self, x):
         for l in self.layers[:-1]:
             x = self.activation(l(x))
         return self.layers[-1](x)
@@ -278,15 +263,15 @@ class Batch_norm_MLP(Model):
             setattr(self, 'Batch_norm' + str(i), layer2)
             self.layers.append(layer2)
 
-    def forward(self, x, training=True):
+    def forward(self, x):
         for i in range(0, len(self.layers) - 1):
             layer = self.layers[i]
-            x = layer(x, training=training)
+            x = layer(x)
             if i % 2 != 0:
                 x = self.activation(x)
 
         layer = self.layers[-1]
-        x = layer(x, training=training)
+        x = layer(x)
         return x
 
 
@@ -312,17 +297,17 @@ class Batchnorm_dropout_MLP(Model):
             setattr(self, 'Batch_norm' + str(i), layer2)
             self.layers.append(layer2)
 
-    def forward(self, x, training=True):
+    def forward(self, x):
         for i in range(0, len(self.layers) - 1):
             layer = self.layers[i]
-            x = layer(x, training=training)
+            x = layer(x)
             if i % 2 != 0:
                 x = self.activation(x)
                 if self.use_dropout:
-                    x = dropout(x, training=training)
+                    x = dropout(x)
 
         layer = self.layers[-1]
-        x = layer(x, training=training)
+        x = layer(x)
         return x
 
 
@@ -336,7 +321,7 @@ class Simple_CNN(Model):
         self.pooling2 = Pooling(2, stride=2)
         self.affine = Gemm(10)
 
-    def forward(self, x, training=True):
+    def forward(self, x):
         y1 = self.convolution1(x)
         y1 = self.activation(y1)
         y1 = self.pooling1(y1)
@@ -358,7 +343,7 @@ class Simple_RNN(Model):
     def reset_state(self):
         self.RNN.reset_state()
 
-    def forward(self, x, training=True):
+    def forward(self, x):
         x = self.RNN(x)
         x = self.affine(x)
 
@@ -374,7 +359,7 @@ class Better_RNN(Model):
     def reset_state(self):
         self.RNN.reset_state()
 
-    def forward(self, x, training=True):
+    def forward(self, x):
         x = self.RNN(x)
         x = self.affine(x)
 
@@ -382,8 +367,6 @@ class Better_RNN(Model):
 
 
 class VGG(Model):
-    '''使用该网络时请注意显存gpu的容量'''
-
     def __init__(self, output=1000, ratio=0.5):
         super().__init__()
         self.ratio = ratio
@@ -409,7 +392,7 @@ class VGG(Model):
         self.affine2 = Affine(4096)
         self.affine3 = Affine(output)
 
-    def forward(self, x, training=True):
+    def forward(self, x):
         '''激活函数用ReLU'''
         x = ReLU(self.conv1_1(x))
         x = ReLU(self.conv1_2(x))
@@ -430,9 +413,9 @@ class VGG(Model):
         x = ReLU(self.conv5_3(x))
         x = self.pool5(x)
         x = ReLU(self.affine1(x))
-        x = dropout(x, training=training, ratio=self.ratio)
+        x = dropout(x, ratio=self.ratio)
         x = ReLU(self.affine2(x))
-        x = dropout(x, training=training, ratio=self.ratio)
+        x = dropout(x, ratio=self.ratio)
         x = self.affine3(x)
 
         return x
@@ -461,7 +444,7 @@ class STL_10_CNN(Model):
         self.affine2 = Affine(100)
         self.affine3 = Affine(output_size)
 
-    def forward(self, x, training=True):
+    def forward(self, x):
         '''激活函数用ReLU'''
         x = ReLU(self.conv1_1(x))
         x = ReLU(self.conv1_2(x))
@@ -479,9 +462,9 @@ class STL_10_CNN(Model):
         # x=ReLU(self.conv5_2(x))
         # x=self.pool5(x)
         x = ReLU(self.affine1(x))
-        x = dropout(x, training=training, ratio=self.ratio)
+        x = dropout(x, ratio=self.ratio)
         x = ReLU(self.affine2(x))
-        x = dropout(x, training=training, ratio=self.ratio)
+        x = dropout(x, ratio=self.ratio)
         x = self.affine3(x)
 
         return x
@@ -515,7 +498,7 @@ class Simple_FCN(Model):
         self.transposed_conv12 = Transpose_Convolution(2, 4, 4, stride=2, pad=1, nobias=True)
         self.transposed_conv13 = Transpose_Convolution(2, 32, 24, stride=8, pad=8, nobias=True)
 
-    def forward(self, x, training=True):
+    def forward(self, x):
         y1 = self.conv1_1(x)
         y1 = self.conv1_2(y1)
         y1 = self.activation(y1)
@@ -567,15 +550,15 @@ class Simple_ResNet(Model):
         self.residual3_2 = ResidualBlock(64, stride=1, use_conv1x1=False)
         self.affine = Affine(10)
 
-    def forward(self, x, training=True):
+    def forward(self, x):
         x = ReLU(self.conv1(x))
         x = self.pool1(x)
-        x = self.residual1_1(x,training=training)
-        x = self.residual1_2(x,training=training)
-        x = self.residual2_1(x,training=training)
-        x = self.residual2_2(x,training=training)
-        x = self.residual3_1(x,training=training)
-        x = self.residual3_2(x,training=training)
+        x = self.residual1_1(x)
+        x = self.residual1_2(x)
+        x = self.residual2_1(x)
+        x = self.residual2_2(x)
+        x = self.residual3_1(x)
+        x = self.residual3_2(x)
         x = self.affine(x)
         return x
 
@@ -587,15 +570,15 @@ class Simple_densenet(Model):
         self.conv1 = Convolution(16, 3, 3, pad=1)
         self.BN1 = BatchNorm()
         self.pool1 = Pooling(2, stride=2)
-        self.dense1 = DenseBlock(32, 4, to_gpu=to_gpu)
+        self.dense1 = DenseBlock(32, 4)
         self.transition1 = TransitionBlock(32)
-        self.dense2 = DenseBlock(64, 4, to_gpu=to_gpu)
+        self.dense2 = DenseBlock(64, 4)
         self.transition2 = TransitionBlock(64)
-        self.dense3 = DenseBlock(64, 4, to_gpu=to_gpu)
+        self.dense3 = DenseBlock(64, 4)
         self.transition3 = TransitionBlock(64)
         self.affine = Affine(10)
 
-    def forward(self, x, training=True):
+    def forward(self, x):
         x = self.conv1(x)
         x = self.BN1(x)
         x = ReLU(x)
@@ -641,25 +624,28 @@ class U_net(Model):
         self.conv9_1 = Convolution(16, 3, 3)
         self.conv9_2 = Convolution(16, 3, 3)
 
-    def forward(self, x, training=True):
+    def forward(self, x):
         x1 = ReLU(self.conv1_1(x))  # 572
         x1 = ReLU(self.conv1_2(x1))  # 570
-        x1_crop = util.copyandcrop(x1, (392, 392))
+        x1_crop = CopyAndCrop((392, 392))(x1)
 
         x2 = self.pool1(x1)  # 568
         x2 = ReLU(self.conv2_1(x2))  # 284
         x2 = ReLU(self.conv2_2(x2))  # 282
-        x2_crop = util.copyandcrop(x2, (200, 200))
+        x2_crop = CopyAndCrop((200, 200))(x2)
+        # x2_crop = util.copyandcrop(x2, (200, 200))
 
         x3 = self.pool2(x2)  # 280
         x3 = ReLU(self.conv3_1(x3))  # 140
         x3 = ReLU(self.conv3_2(x3))  # 138
-        x3_crop = util.copyandcrop(x3, (104, 104))
+        x3_crop = CopyAndCrop((104, 104))(x3)
+        # x3_crop = util.copyandcrop(x3, (104, 104))
 
         x4 = self.pool3(x3)  # 136
         x4 = ReLU(self.conv4_1(x4))  # 68
         x4 = ReLU(self.conv4_2(x4))  # 66
-        x4_crop = util.copyandcrop(x4, (56, 56))
+        x4_crop = CopyAndCrop((56, 56))(x4)
+        # x4_crop = util.copyandcrop(x4, (56, 56))
 
         x = self.pool4(x4)  # 64
         x = ReLU(self.conv5_1(x))  # 32

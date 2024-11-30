@@ -3,7 +3,7 @@ gpu_enable=True
 try:#试着能否导入cupy
     import cupy as cp
     cupy=cp
-    print('GPU enabled')
+    # print('GPU enabled')
 except ImportError:
     gpu_enable=False
 from skystar.core import Variable

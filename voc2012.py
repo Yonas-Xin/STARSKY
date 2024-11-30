@@ -3,8 +3,6 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
-import skystar.utils
-
 
 def pad(feature,label,height,width):
     '''如果图像不支持切割成预定的大小，则对图像进行扩充'''
