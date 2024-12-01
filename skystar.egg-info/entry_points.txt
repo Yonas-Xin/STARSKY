@@ -1,0 +1,2 @@
+[console_scripts]
+skystar = skystar.__main__:main
