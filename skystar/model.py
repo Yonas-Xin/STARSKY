@@ -1,5 +1,8 @@
 import os.path
 
+import skystar.utils
+# import matplotlib.pyplot as plt
+
 from skystar.layer import *
 from skystar.utils import plot_dot_graph
 from skystar.graph import create_graph, save_graph
@@ -19,6 +22,9 @@ class Model(Layer):
         y = self.forward(*inputs)
         return y
 
+    def check(self):
+        for layer in self._layers:
+            print('LayerAttribute: '+layer)
     def __repr__(self):
         info='----------'+self.__class__.__name__+'----------\n'
         for layername in self._layers:
@@ -56,45 +62,57 @@ class Model(Layer):
         save_graph(graph, model_name, file_name=path, ifsimplify=ifsimplify)
         return
 
-    def train(self, train, test=None, lr=0.001, epoch=300, plot=False, plot_rate=0.1,
-              loss_func=skystar.core.softmaxwithloss,
-              accuracy=skystar.utils.accuracy, optimizer=Adam, use_gpu=True, save_model=True, autodecrese=False):
+    def train(self, train, test=None, mode='Segmentation', lr=0.001, epoch=300, use_gpu=True, interval_epoch=25, plot=True):
+        if mode == 'Sort':
+            self._train(train=train, test=test, lr=lr, epoch=epoch, plot=False, interval_epoch=interval_epoch,
+                        loss_func=skystar.core.softmaxwithloss
+                        , accuracy=skystar.utils.accuracy, optimizer=Adam, use_gpu=use_gpu, save_model=True)
+        elif mode == 'Segmentation':
+            self._train(train=train, test=test, lr=lr, epoch=epoch, plot=plot, interval_epoch=interval_epoch,
+                        loss_func=skystar.core.softmaxwithloss
+                        , accuracy=skystar.utils.mean_IoU, optimizer=Adam, use_gpu=use_gpu, save_model=True)
+        elif mode == 'Sequence':
+            self.TrainForSeq(train=train, test=None, lr=lr, epoch=epoch, BPTT=30,
+                             loss_func=skystar.core.mean_squared_error,
+                             optimizer=Adam, use_gpu=use_gpu, save_model=True)
+        else:
+            raise ValueError('mode must be "Sort" or "Segmentation" or "Sequence"')
+    def _train(self, train, test=None, lr=0.01, epoch=300, plot=False, interval_epoch=30,
+               loss_func=skystar.core.softmaxwithloss,
+               accuracy=skystar.utils.accuracy, optimizer=Adam, use_gpu=True, save_model=True):
         '''
         :param train: 训练数据迭代器，需要dataloader
+        :param interval_epoch: epoch间隔，每隔该轮次保存一次模型以及生成图像
         :param lr: 学习率，默认为0.001
         :param epoch: 学习轮次
         :param test: 测试数据迭代器，默认为None
         :param loss_func: 指定损失函数，默认为softmaxwithloss
         :param accuracy: 指定计算准确率的函数，默认为工具中的accuracy
         :param plot: 是否在过程中画图，画图功能只有在test中才可用
-        :param plot_rate: 画图比率
         :param optimizer: 优化器，默认为Adam
         :param use_gpu: 是否使用gpu，默认为Ture
-        :return: 无返回，后续考虑返回准确率的和损失值的列表
+        :return:
         '''
-        print('Training begin：')
+        print('===============Training Begin===============')
         if use_gpu:
-            print('GPU is available, and all parameters are converted to cp.ndarray')
             if skystar.cuda.gpu_enable:
                 self.to_gpu()
                 train.to_gpu()
+                print('GPU is available, and all parameters are converted to cp.ndarray')
                 if test is not None:
                     test.to_gpu()
-        self.list = [[], [], []]
+            else:
+                use_gpu = False
+        self.results = [['train_loss'], ['train_acc'], ['test_acc']]
         optimizer = optimizer(lr).setup(self)
         for i in range(epoch):
             if not Get_TrainingMode():
                 Set_TrainingMode(True)
-            if i % int(epoch // 2) == 0 and autodecrese:
-                '''后期训练把学习率降低'''
-                lr = lr / 10
-                optimizer.lr = lr
             print(f'Epoch {i + 1}:')
-            sum_acc = 0.0
-            sum_loss = 0.0
-            time.sleep(0.1)  # 停顿0.1秒，避免输出条与输出字符串同步
+            sum_acc,sum_loss = 0.0,0.0
+            time.sleep(0.01)  # 停顿0.1秒，避免输出条与输出字符串同步
             # 使用 tqdm 包裹训练数据集
-            for x, t in tqdm(train, desc='Training', total=len(train) / train.batch_size):
+            for x, t in tqdm(train, desc='Training', total=train.max_iter):
                 y = self(x)
                 loss = loss_func(y, t)
                 self.cleangrads()
@@ -105,69 +123,70 @@ class Model(Layer):
                 sum_loss += loss.data
 
             print(f'Train_Loss {sum_loss / len(train)}')
-            self.list[0].append(sum_loss / len(train))
+            self.results[0].append(sum_loss / len(train))
             if accuracy is not None:
                 print(f'Train_Acc {sum_acc / len(train)}')
-                self.list[1].append(sum_acc / len(train))
+                self.results[1].append(sum_acc / len(train))
 
-            time.sleep(0.1)  # 停顿0.1秒，避免输出条与输出字符串同步
-            # 如果输入了测试集，则进行网络测试
             if test is not None:
-                if Get_TrainingMode():
-                    Set_TrainingMode(False)
-                sum_acc = 0.0
-                num = 1 * test.batch_size
-                plot_num = int(plot_rate * len(test))
-                with skystar.core.no_grad():
-                    for x, t in tqdm(test, desc='Testing', total=len(test) // test.batch_size):
-                        y = self(x)
-                        if accuracy is not None:
-                            sum_acc += accuracy(y, t) * len(t)
-                        if num % plot_num == 0 and plot:
-                            if i == 0: Variable(x).image_show(mode='feature', label=f' Epoch{i + 1} Real' + str(num))
-                            if t.ndim >= 3:
-                                if i == 0: Variable(t).image_show(mode='label', label=f' Epoch{i + 1} Real' + str(num))
-                                y_predict = Variable(y.data.argmax(axis=1))
-                                y_predict.image_show(mode='label', label=f' Epoch{i + 1} Prediction' + str(num))
+                '''这里已经将数据加载到gpu上，因此默认use_gpu为False'''
+                if ((i+1) % interval_epoch == 0 or i==epoch-1) and plot:
+                    self.results[2].append(self.eval(test, use_gpu=False, accuracy=accuracy, plot=True, plot_num=2, label=f'Epoch{i + 1}_'))
+                else:
+                    self.results[2].append(self.eval(test, use_gpu=False, accuracy=accuracy, plot=False, plot_num=2))
 
-                        num += 1 * test.batch_size
-                print(f'Test_Acc: {sum_acc / len(test)}')
-                self.list[2].append(sum_acc / len(test))
+            '''自动保存模型'''
+            if save_model and ((i+1)%interval_epoch==0 or i==epoch-1):
+                name = self.__class__.__name__
+                print('Saving the model params......')
+                self.save_weights(filename=name)
+                print('Saving the results......')
+                for result in self.results:
+                    if result:
+                        name=result[0]+'.txt'
+                        skystar.utils.write_text(result[1:],name)
+                if use_gpu:
+                    self.to_gpu()
+
         if save_model:
-            name = self.__class__.__name__
-            print('Saving the model params......')
-            self.save_weights(filename=name)
+            print('Saving the model onnx......')
+            self.save_to_onnx(x)
+            if use_gpu:
+                self.to_gpu()
 
-    def test(self, test, use_gpu=True, plot=True, plot_rate=0.1, accuracy=skystar.utils.accuracy):
+
+    def eval(self, test, use_gpu=True, accuracy=skystar.utils.accuracy,plot=False,plot_num=2,label=''):
+        '''评估模式下，如果使用plot=ture，'''
         Set_TrainingMode(False)
-        print('Test begin：')
+        print('===============Test Begin===============')
         if use_gpu:
-            print('GPU is available, and all parameters are converted to cp.ndarray')
             if skystar.cuda.gpu_enable:
                 self.to_gpu()
                 test.to_gpu()
+                print('GPU is available, and all parameters are converted to cp.ndarray')
+        plot_interval_num=test.max_iter//plot_num
+        iter_num=0
         sum_acc = 0.0
-        num, i = 1 * test.batch_size, 0
-        plot_num = int(plot_rate * len(test))
         with skystar.core.no_grad():
-            for x, t in tqdm(test, desc='Testing', total=len(test) // test.batch_size):
+            for x, t in tqdm(test, desc='Testing', total=test.max_iter):
+                iter_num+=1
                 y = self(x)
                 if accuracy is not None:
                     sum_acc += accuracy(y, t) * len(t)
-                if num % plot_num == 0 and plot:
-                    Variable(x).image_show(mode='feature', label=f' Real' + str(num))
-                    if t.ndim >= 3:
-                        Variable(t).image_show(mode='label', label=f' Real' + str(num))
-                        y_predict = Variable(y.data.argmax(axis=1))
-                        y_predict.image_show(mode='label', label=f' Prediction' + str(num))
-                num += 1 * test.batch_size
+                if iter_num%plot_interval_num==0 and plot:
+                    predict=y.data.argmax(axis=1)
+                    predict=predict.reshape(predict.shape[0],1,predict.shape[1],predict.shape[2])
+                    img=skystar.utils.Create_ImgForSeg((x,t,predict))
+                    skystar.utils.save_img(img,name=label+f'num{iter_num}')
+
         print(f'Test_Acc: {sum_acc / len(test)}')
+        return sum_acc / len(test)
 
     def TrainForSeq(self, train, test=None, lr=0.001, epoch=300, BPTT=30,loss_func=skystar.core.mean_squared_error,
-                    optimizer=Adam, use_gpu=True, save_model=True, autodecrese=False, leave=True, sleep=False):
+                    optimizer=Adam, use_gpu=True, save_model=True):
         '''专门用于序列模型的训练函数'''
         Set_TrainingMode(True)
-        print('Training begin：')
+        print('===============Training Begin===============')
         if use_gpu:
             print('GPU is available, and all parameters are converted to cp.ndarray')
             if skystar.cuda.gpu_enable:
@@ -179,15 +198,9 @@ class Model(Layer):
         optimizer = optimizer(lr).setup(self)
         for i in range(epoch):#训练开始
             self.reset_state()
-            if i % int(epoch // 2) == 0 and autodecrese:
-                '''后期训练把学习率降低'''
-                lr = lr / 10
-                optimizer.lr = lr
             print(f'Epoch {i + 1}:')
             loss,count = 0.0, 0
-            if sleep:
-                time.sleep(0.1)  # 停顿0.1秒，避免输出条与输出字符串同步
-            for x, t in tqdm(train, desc='Training', total=len(train), leave=leave):
+            for x, t in tqdm(train, desc='Training', total=len(train)):
                 y=self(x)
                 loss+=loss_func(y, t)
                 count+=1
@@ -636,19 +649,16 @@ class U_net(Model):
         x2 = ReLU(self.conv2_1(x2))  # 284
         x2 = ReLU(self.conv2_2(x2))  # 282
         x2_crop = CopyAndCrop((200, 200))(x2)
-        # x2_crop = util.copyandcrop(x2, (200, 200))
 
         x3 = self.pool2(x2)  # 280
         x3 = ReLU(self.conv3_1(x3))  # 140
         x3 = ReLU(self.conv3_2(x3))  # 138
         x3_crop = CopyAndCrop((104, 104))(x3)
-        # x3_crop = util.copyandcrop(x3, (104, 104))
 
         x4 = self.pool3(x3)  # 136
         x4 = ReLU(self.conv4_1(x4))  # 68
         x4 = ReLU(self.conv4_2(x4))  # 66
         x4_crop = CopyAndCrop((56, 56))(x4)
-        # x4_crop = util.copyandcrop(x4, (56, 56))
 
         x = self.pool4(x4)  # 64
         x = ReLU(self.conv5_1(x))  # 32
