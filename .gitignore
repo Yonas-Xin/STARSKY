@@ -1,2 +1,4 @@
 *.onnx
 *.npz
+*.whl
+*.gz

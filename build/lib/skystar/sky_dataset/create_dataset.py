@@ -14,7 +14,7 @@ def init_dir():#初始化一个储存数据的文件夹
 def get_names(path):
     '''从txt文本中获取图像的路径'''
     dir_path=init_dir()
-    if not os.path.isdir(path):#路径不是绝对路径
+    if not os.path.exists(path):
         path=os.path.join(dir_path,'data_txt',path)
         if not os.path.exists(path):
             print('The path {} does not exist!Please place the .txt file in the data_txt directory'.format(path))

@@ -1,9 +1,20 @@
-from matplotlib import image
+'''Info:该脚本用于制作Voc2012的数据集，但是删除了matplotlib的接口，后续考虑使用PIL接口'''
+# from matplotlib import image
 import os
 import numpy as np
-import matplotlib.pyplot as plt
 
-
+'''颜色条'''
+VOC_COLORMAP = [[245, 245, 245], [128, 0, 0], [0, 128, 0], [128, 128, 0],
+                [0, 0, 128], [128, 0, 128], [0, 128, 128], [128, 128, 128],
+                [64, 0, 0], [192, 0, 0], [64, 128, 0], [192, 128, 0],
+                [64, 0, 128], [192, 0, 128], [64, 128, 128], [192, 128, 128],
+                [0, 64, 0], [128, 64, 0], [0, 192, 0], [128, 192, 0],
+                [0, 64, 128]]
+'''类别'''
+VOC_CLASSES = ['background', 'aeroplane', 'bicycle', 'bird', 'boat',
+               'bottle', 'bus', 'car', 'cat', 'chair', 'cow',
+               'diningtable', 'dog', 'horse', 'motorbike', 'person',
+               'potted plant', 'sheep', 'sofa', 'train', 'tv/monitor']
 def pad(feature,label,height,width):
     '''如果图像不支持切割成预定的大小，则对图像进行扩充'''
     H,W,C=feature.shape
@@ -14,8 +25,8 @@ def pad(feature,label,height,width):
         try:
             label = np.pad(label, [(pad, pad), (0, 0), (0, 0)], mode='constant', constant_values=0)
         except ValueError:
-            plt.imshow(label)
-            plt.show()
+            # plt.imshow(label)
+            # plt.show()
             pass
             label = np.pad(label, [(pad, pad), (0, 0)], mode='constant', constant_values=0)
     if W<=width:
@@ -37,10 +48,11 @@ def read_voc_images(voc_dir, is_train=True):
         images = f.read().split()
     features, labels = [], []
     for i, fname in enumerate(images):
-        features.append(image.imread(os.path.join(
-            voc_dir, 'JPEGImages', f'{fname}.jpg')))
-        labels.append((image.imread(os.path.join(
-            voc_dir, 'SegmentationClass', f'{fname}.png'))*255).astype(np.uint8))
+        pass
+        # features.append(image.imread(os.path.join(
+        #     voc_dir, 'JPEGImages', f'{fname}.jpg')))
+        # labels.append((image.imread(os.path.join(
+        #     voc_dir, 'SegmentationClass', f'{fname}.png'))*255).astype(np.uint8))
     return features, labels
 #@save
 def voc_colormap2label():
@@ -124,18 +136,6 @@ def voc_rand_crop(feature, label, height, width):
     feature, rect = random_crop(feature, (width, height))
     label = fixed_crop(label, *rect)
     return feature, label
-'''颜色条'''
-VOC_COLORMAP = [[0, 0, 0], [128, 0, 0], [0, 128, 0], [128, 128, 0],
-                [0, 0, 128], [128, 0, 128], [0, 128, 128], [128, 128, 128],
-                [64, 0, 0], [192, 0, 0], [64, 128, 0], [192, 128, 0],
-                [64, 0, 128], [192, 0, 128], [64, 128, 128], [192, 128, 128],
-                [0, 64, 0], [128, 64, 0], [0, 192, 0], [128, 192, 0],
-                [0, 64, 128]]
-'''类别'''
-VOC_CLASSES = ['background', 'aeroplane', 'bicycle', 'bird', 'boat',
-               'bottle', 'bus', 'car', 'cat', 'chair', 'cow',
-               'diningtable', 'dog', 'horse', 'motorbike', 'person',
-               'potted plant', 'sheep', 'sofa', 'train', 'tv/monitor']
 def create_data(path, is_train=True,height=224,width=224,mutify=10):
     '''
     :param path: 存放数据的根目录

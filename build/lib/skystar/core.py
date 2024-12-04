@@ -55,16 +55,15 @@ class Variable:
                     if x.creator is not None:
                         funcs.append(x.creator)
                         x.unchain()
-    '''用于把数据用图像展示，采用了matplotlib的接口'''
-    def image_show(self,mode='feature',label=None):
-        if self.ndim!=4:
-            if self.ndim==3:
-                C,H,W=self.data.shape
-                self.data=self.data.reshape(1,C,H,W)
-            if self.ndim==2:
-                H,W=self.data.shape
-                self.data=self.data.reshape(1,1,H,W)
-        skystar.utils.images_show(self.data, mode=mode,label=label)
+    '''用于把数据用图像展示，采用了matplotlib的接口,暂时取消使用'''
+    def img_show(self):
+        img=skystar.utils.splicing(self.data)
+        img.show()
+    def data_to_img_save(self,out_filename=None):
+        if out_filename is None and self.name is None:
+            out_filename='NoneName'
+        img=skystar.utils.splicing(self.data)
+        skystar.utils.save_img(img,out_filename)
     def to_cpu(self):
         if self.data is not None:
             self.data=skystar.cuda.as_numpy(self.data)
@@ -816,14 +815,15 @@ class Conv(Function):
         FN, C, FH, FW = W.shape
         dout = dout.transpose(0, 2, 3, 1).reshape(-1, FN)#(N*oh*ow,FN)
 
-        if b is not None:
-            b.grad = sum(dout, axis=0)  # (FN,)
-        W.grad = dot(self.col.T, dout).transpose(1,0).reshape(FN,C,FH,FW)
+        dw = dot(self.col.T, dout).transpose(1,0).reshape(FN,C,FH,FW)
 
         dcol = dot(dout, self.col_W.T)#Variable(N*oh*ow,c*fh*fw)
         dx = skystar.utils.col2im(dcol.data, x.shape, FH, FW, self.stride, self.pad)#shape(N,C,H,W)
         dx=Variable(dx)
-        return dx
+        if b is not None:
+            db = sum(dout, axis=0)  # (FN,)
+            return dx, dw, db
+        return dx, dw
 def convolution(x,W,b,stride=1,pad=0):
     return Conv(stride,pad)(x,W,b)
 
@@ -866,15 +866,16 @@ class ConvTranspose(Function):
         out_channel, in_channel, FH, FW = W.shape
         dout = dout.transpose(0, 2, 3, 1).reshape(-1, out_channel)#(N*oh*ow,out_channel)
 
-        if b is not None:
-            b.grad = sum(dout, axis=0)  # (FN,)
-        W.grad = dot(self.col.T, dout).transpose(1, 0).reshape(out_channel, in_channel, FH, FW)#这里得到的梯度是翻转后W的梯度，因此梯度需要翻转
-        W.grad.data = xp.flip(W.grad.data.transpose(1, 0, 2, 3), axis=(2, 3))
+        dw = dot(self.col.T, dout).transpose(1, 0).reshape(out_channel, in_channel, FH, FW)#这里得到的梯度是翻转后W的梯度，因此梯度需要翻转
+        dw = Variable(xp.flip(dw.data.transpose(1, 0, 2, 3), axis=(2, 3)))
 
         dcol = dot(dout, self.col_W.T)#Variable(N*oh*ow,c*fh*fw)
         dx = skystar.utils.col2im(dcol.data, self.shape, FH, FW, stride=1,pad=0)#shape(N,C,H,W)
         dx=Variable(skystar.utils.back_transcov_pad(dx,stride=self.stride,kernel_size=FH,pad=self.pad))
-        return dx
+        if b is not None:
+            db = sum(dout, axis=0)  # (FN,)
+            return dx, dw, db
+        return dx,dw
 def transposed_convolution(x,weight,b,stride=1,pad=0):
     return ConvTranspose(stride=stride, pad=pad)(x, weight, b)
 

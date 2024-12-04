@@ -3,7 +3,7 @@ import numpy as np
 from skystar import cuda
 
 class Dataloader:
-    def __init__(self,dataset,batch_size,shuffle=True,gpu=False):
+    def __init__(self,dataset,batch_size,shuffle=True,gpu=False,dtype=np.float32):
         self.dataset=dataset
         self.batch_size=batch_size
         self.shuffle=shuffle
@@ -12,6 +12,7 @@ class Dataloader:
         self.gpu=gpu
 
         self.reset()
+        self.dataset.set_datatype(dtype)#初始化时更新数据type
 
     def reset(self):
         self.iteration=0
@@ -28,6 +29,7 @@ class Dataloader:
             self.reset()
             raise StopIteration
 
+        '''按照batch大小取出数据，如果最后一部分数据少于batch，那么直接取出剩余数据'''
         i,batch_size=self.iteration,self.batch_size
         batch_index=self.index[i*batch_size:(i+1)*batch_size]
         batch=[self.dataset[i] for i in batch_index]
@@ -49,6 +51,7 @@ class Dataloader:
 
     def __len__(self):
         return self.data_size
+
 
 
 class SeqDataloader(Dataloader):

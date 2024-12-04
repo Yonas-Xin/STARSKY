@@ -1,15 +1,25 @@
 import os
 import subprocess
 import urllib.request
-import skystar
+from skystar import no_grad
 from skystar.cuda import get_array_module
-import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
+from skystar.cuda import as_numpy
+from skystar.sky_dataset import data_to_npz
+# import matplotlib.pyplot as plt
+# import matplotlib.colors as mcolors
 import numpy as np
+from PIL import Image
 
 from skystar.voc2012 import VOC_COLORMAP  # 颜色条
 
-
+def make_dir(dirname):
+    dir = os.getcwd()
+    dir = os.path.join(dir, dirname)
+    if not os.path.exists(dir):
+        os.makedirs(dir)
+    return dir
+def pair():
+    pass
 def _dot_var(v, verbose=False):  # v是Variable实例,该函数实现单个元素的dot转换
     def shape_txt(x):
         label = 'shape['
@@ -439,7 +449,7 @@ def accuracy(y, t):
     y:Variable
     t:ndarray
     '''
-    with skystar.core.no_grad():
+    with no_grad():
         xp = get_array_module(y)
         if t.ndim > 3:
             xp = get_array_module(y)
@@ -481,9 +491,11 @@ def mean_IoU(y, t):
     mean_iou = xp.mean(xp.array(iou_list))  # 计算平均IoU
     mean_iou = float(mean_iou)
     return mean_iou
+def dataset_to_npz(data_txt_name, outfile_name):
+    '''输入txt文件，返回数据集，数据集的字典为x_dataset,t_dataset'''
+    return data_to_npz(data_txt_name, outfile_name)
 
-
-def img_norm(x, _range=(0, 1)):
+def data_norm(x, _range=(0, 1),dtype=np.float32):
     '''
     对单幅图像进行归一化
     :param x: 图像的矩阵，shape：num,C,H,W
@@ -494,145 +506,286 @@ def img_norm(x, _range=(0, 1)):
     range_max = _range[1]
     _max = np.max(x)
     _min = np.min(x)
-    #    _max=np.max(np.max(np.max(x,axis=2,keepdims=True),axis=3,keepdims=True),axis=1,keepdims=True)
-    #    _min=np.min(np.min(np.min(x,axis=2,keepdims=True),axis=3,keepdims=True),axis=1,keepdims=True)
-    k = (range_max - range_min) / (_max - _min)
+    k = (range_max - range_min) / (_max - _min + 1e-5)
     x = k * (x - _min)
+    x=x.astype(dtype)
     return x
 
 
-def voc_colormap2cmap():
-    """将自定义的颜色条转换为 matplotlib 可识别的 ListedColormap"""
-    return mcolors.ListedColormap(np.array(VOC_COLORMAP) / 255.0)
+# def datatofeature(data,mode='feature',pad=1):
+#     '''图像预处理'''
+#     data = skystar.cuda.as_numpy(data)
+#     if mode == 'feature' or mode == 'weight':
+#         data = data_norm(data, _range=(0, 255))  # 把数据映射到0~255
+#     data = data.astype(np.float32)
+#     data = data.transpose(0, 2, 3, 1)
+#
+#     '''额外添加图片，满足图像x*x排列'''
+#     num, H, W, C = data.shape
+#     x = int_square_root(num)  # x*x
+#     if x * x > num:
+#         add_num = x * x - num
+#         new_data = np.zeros((add_num, H, W, C), dtype=np.float32)
+#         if mode == 'feature' or 'weight':
+#             new_data += 255  # 生成白图
+#         elif mode == 'label':
+#             new_data += np.max(data)
+#         data = np.concatenate((data, new_data), axis=0)
+#     full_image = splicing(data, x, pad=pad, padnum=255)  # 图像填充和拼接
+#     return full_image
+# def int_square_root(x):
+#     '''确定x的整数平方根，若无整数平方根，x+1直到能取整数平方根为之'''
+#     sqrt = np.sqrt(x)
+#     y = asif_int(sqrt)
+#     while not y:
+#         x += 1
+#         sqrt = np.sqrt(x)
+#         y = asif_int(sqrt)
+#     return int(sqrt)
+# def asif_int(x):
+#     '''判断数是否为整数'''
+#     x = ((x - int(x)) == 0)
+#     return x
+# def splicing(data, P_num, pad=1, padnum=255):
+#     '''该函数用于将四维的多个图片变为二维矩阵，即将图像二维排列,P_num:排列数'''
+#     num, H, W, C = data.shape  # 原图大小
+#     data = data.reshape(P_num, P_num, H, W, C)
+#     # 按行和列拼接数据，形成完整的图像
+#     rows = []
+#     for i in range(P_num):
+#         row = np.concatenate(data[i, :, :, :, :],
+#                              axis=1)  # 拼接行data[i, :, :, :, :]取出 i行(x, H_pad, W_pad, C)数据,拼接后的数据降维（H，W，C），可以理解为axis=1在W方向上拼接
+#         rows.append(row)
+#     full_image = np.concatenate(rows, axis=0)
+#     # 给不同图像之间添加分界线用以区别
+#     H_full, W_full, C = full_image.shape
+#     re_img = (np.zeros((H_full + P_num - 1, W_full + P_num - 1, C)) + padnum)
+#     for i in range(P_num):
+#         x = i * (H + pad)
+#         for j in range(P_num):
+#             y = j * (W + pad)
+#             re_img[x:x + H, y:y + W, :] = full_image[i * H:i * H + H, j * W:j * W + W, :]
+#     return re_img
+# def X_mode_show(feature, label,alpha=1):
+#     H, W, C = feature.shape
+#     if C == 1:  # 通道为1显示灰度图
+#         plt.imshow(feature, cmap='gray')
+#     else:  # 真彩色
+#         re_img = np.zeros((H, W, 3))
+#         re_img[:, :, 0] = feature[:, :, 0]
+#         re_img[:, :, 1] = feature[:, :, 1]
+#         if C == 2:
+#             re_img[:, :, 2] += 255
+#         else:
+#             re_img[:, :, 2] = feature[:, :, 2]
+#         re_img = np.uint8(re_img)
+#         plt.imshow(re_img,alpha=alpha)
+#     plt.axis('off')
+#     plt.title('Feature' + label)
+#     plt.show()
+#
+# def T_mode_show(feature, label):
+#     feature = np.squeeze(feature)
+#     unique_labels = np.unique(feature)
+#     cmap = voc_colormap2cmap()  # 使用自定义的颜色条映射
+#     # 创建标签与颜色之间的映射
+#     norm = mcolors.BoundaryNorm(boundaries=np.arange(len(unique_labels) + 1) - 0.5, ncolors=len(unique_labels))
+#     plt.imshow(feature, cmap=cmap, norm=norm,alpha=1)
+#     plt.axis('off')
+#     plt.title('Label' + label)
+#     # 显示图像
+#     plt.show()
+# def Weight_mode_show(feature, label):
+#     H, W, C = feature.shape
+#     if C == 1:  # 通道为1显示灰度图
+#         plt.imshow(feature, cmap='gray')
+#     else:
+#         re_img = np.zeros((H, W, 3))
+#         re_img[:, :, 0] = feature[:, :, 0]
+#         re_img[:, :, 1] = feature[:, :, 1]
+#         if C == 2:
+#             re_img[:, :, 2] += 255
+#         else:
+#             re_img[:, :, 2] = feature[:, :, 2]
+#         re_img = re_img[:, :, 0] * 0.2989 + re_img[:, :, 1] * 0.5870 + re_img[:, :, 2] * 0.1140
+#         re_img = np.uint8(re_img)
+#         plt.imshow(re_img, cmap='gray')
+#     plt.axis('off')
+#     plt.title('Feature' + label)
+#     plt.show()
+#     return
+# def images_show(data, pad=1, mode='feature', label=None):
+#     '''
+#     :param data: ndarray shape: num,C,H,W
+#     :param pad: 中间填充数量，用于区分图像，默认为1
+#     :param mode: 模式，默认为’X‘  可选X T
+#     :param label: 图名
+#     :return: 显示平铺的图形
+#     '''
+#     '''图像预处理'''
+#     full_image=datatofeature(data,mode=mode,pad=pad)
+#     '''图像显示'''
+#     if label is None:
+#         label = ''
+#     else:
+#         label = ':' + label
+#     if mode == 'feature':
+#         X_mode_show(full_image, label)
+#     elif mode == 'label':
+#         T_mode_show(full_image, label)
+#     elif mode == 'weight':
+#         Weight_mode_show(full_image, label)
+#     else:
+#         print(f'not support mode:{label}')
 
+# def init_graph():
+#     figure,axes= plt.subplots(nrows=1, ncols=3)
+#     for ax in axes.flat:  # 对于多行，遍历所有子图并关闭轴
+#         ax.axis('off')
+#     return figure,axes
+# def subplots_show(axes, x, t, predict, t_alpha=1):
+#     feature = datatofeature(x, mode='feature')
+#     t_feature=datatofeature(t,mode='label')
+#     predict_feature=datatofeature(predict,mode='label')
+#     fh,fw,fc=feature.shape
+#     re_img = np.zeros((fh, fw, 3))
+#     if fc>=3:
+#         re_img[:,:,0:3]=feature[:,:,0:3]
+#         re_img = np.uint8(re_img)
+#         axes[0].imshow(re_img)
+#
+#     else:
+#         print('真彩图的通道数少于3，无法正常显示')
+#         raise
+#     t_feature = np.squeeze(t_feature)
+#     predict_feature = np.squeeze(predict_feature)
+#
+#     unique_labels = np.unique(t_feature)
+#     cmap = voc_colormap2cmap()  # 使用自定义的颜色条映射
+#     # 创建标签与颜色之间的映射
+#     norm = mcolors.BoundaryNorm(boundaries=np.arange(len(unique_labels) + 1) - 0.5, ncolors=len(unique_labels))
+#     axes[1].imshow(t_feature, cmap=cmap, norm=norm)
+#     axes[2].imshow(predict_feature, cmap=cmap, norm=norm,alpha=t_alpha)
 
-def images_show(data, pad=1, mode='feature', label=None):
-    '''
-    :param data: ndarray shape: num,C,H,W
-    :param pad: 中间填充数量，用于区分图像，默认为1
-    :param mode: 模式，默认为’X‘  可选X T
-    :param label: 图名
-    :return: 显示平铺的图形
-    '''
+# def save_figure(figure, label=None):
+#     dir = os.getcwd()
+#     dir = os.path.join(dir, 'figures')
+#     if not os.path.exists(dir):
+#         os.makedirs(dir)
+#     filename = os.path.join(dir, label)
+#     figure.savefig(filename)
+#     print(f'Figture creted!path:{filename}')
 
-    def int_square_root(x):
-        '''确定x的整数平方根，若无整数平方根，x+1直到能取整数平方根为之'''
-        sqrt = np.sqrt(x)
-        y = asif_int(sqrt)
-        while not y:
-            x += 1
-            sqrt = np.sqrt(x)
-            y = asif_int(sqrt)
-        return int(sqrt)
+def write_text(list,filename):
+    dir = os.getcwd()
+    dir = os.path.join(dir, 'results')
+    if not os.path.exists(dir):
+        os.makedirs(dir)
+    filename=os.path.join(dir, filename)
+    with open(filename,'w',encoding='utf-8') as f:
+        for item in list:
+            f.write(str(item)+'\n')
+    print(f'list.txt created path:{filename}')
+def read_text(filename):
+    dir = os.getcwd()
+    dir = os.path.join(dir, 'results')
+    if not os.path.exists(dir):
+        os.makedirs(dir)
+    filename=os.path.join(dir, filename)
+    with open(filename,'r',encoding='utf-8') as f:
+        text_list = [float(line.strip()) for line in f if line.strip()]
+    return text_list
+# def voc_colormap2cmap():
+#     """将自定义的颜色条转换为 matplotlib 可识别的 ListedColormap"""
+#     return mcolors.ListedColormap(np.array(VOC_COLORMAP) / 255.0)
+def To_PIL(data_array):
+    if data_array.shape[0]==3:
+        data_array=data_array.transpose((1,2,0))
+    img=Image.fromarray(data_array)
+    return img
+def label_to_rgb(t):
+    '''根据颜色条将label映射到rgb图像'''
+    H, W = t.shape
+    t=t.reshape(-1)
+    rgb=[VOC_COLORMAP[i] for i in t ]
+    rgb=np.array(rgb,dtype=np.uint8)
+    rgb=rgb.reshape(H,W,3)
+    return rgb
+def image_pad(im):
+    '''给图像填充1像素的黑边'''
+    data=np.array(im)
+    data=np.pad(data,((1,1),(1,1),(0,0)), 'constant',constant_values=0)
+    return To_PIL(data)
+def cal_premutation(num):
+    '''输入图像的数量，计算最佳排列，如12->3*4,13->4*4'''
+    sqrt=np.sqrt(num)
+    int_sqrt=int(sqrt)
+    if num==int_sqrt*int_sqrt:
+        return (int_sqrt,int_sqrt)
+    elif (int_sqrt*(int_sqrt+1)>=num) and (num>int_sqrt*int_sqrt):
+        return (int_sqrt,int_sqrt+1)
+    else:
+        return (int_sqrt+1,int_sqrt+1)
 
-    def asif_int(x):
-        '''判断数是否为整数'''
-        x = ((x - int(x)) == 0)
-        return x
+def splicing(data):
+    '''把四维的array数据转化为多个图像并拼接'''
+    # 把四维data转化为多个三维datas
+    data = as_numpy(data)
+    num, C, H, W = data.shape
+    if C==3:
+        datas=[data_norm(data[i],(0,255),np.uint8) for i in range(num)]#对数据进行归一化
+    elif C==1:
+        datas=[label_to_rgb(data[i][0]) for i in range(num)]
+    else:
+        raise
+    im_list=[To_PIL(data) for data in datas]
+    im_list=[image_pad(im) for im in im_list]
 
-    def splicing(data, P_num, pad=pad, padnum=255):
-        '''该函数用于将四维的多个图片变为二维矩阵，即将图像二维排列,P_num:排列数'''
-        num, H, W, C = data.shape  # 原图大小
-        data = data.reshape(P_num, P_num, H, W, C)
-        # 按行和列拼接数据，形成完整的图像
-        rows = []
-        for i in range(P_num):
-            row = np.concatenate(data[i, :, :, :, :],
-                                 axis=1)  # 拼接行data[i, :, :, :, :]取出 i行(x, H_pad, W_pad, C)数据,拼接后的数据降维（H，W，C），可以理解为axis=1在W方向上拼接
-            rows.append(row)
-        full_image = np.concatenate(rows, axis=0)
-        # 给不同图像之间添加分界线用以区别
-        H_full, W_full, C = full_image.shape
-        re_img = (np.zeros((H_full + P_num - 1, W_full + P_num - 1, C)) + padnum)
-        for i in range(P_num):
-            x = i * (H + pad)
-            for j in range(P_num):
-                y = j * (W + pad)
-                re_img[x:x + H, y:y + W, :] = full_image[i * H:i * H + H, j * W:j * W + W, :]
-        return re_img
+    # 单幅图像尺寸
+    width, height = im_list[0].size
 
-    def X_mode_show(feature, label):
-        H, W, C = feature.shape
-        if C == 1:  # 通道为1显示灰度图
-            plt.imshow(feature, cmap='gray')
-        else:  # 真彩色
-            re_img = np.zeros((H_full, W_full, 3))
-            re_img[:, :, 0] = feature[:, :, 0]
-            re_img[:, :, 1] = feature[:, :, 1]
-            if C == 2:
-                re_img[:, :, 2] += 255
-            else:
-                re_img[:, :, 2] = feature[:, :, 2]
-            re_img = np.uint8(re_img)
-            plt.imshow(re_img)
-        plt.axis('off')
-        plt.title('Feature' + label)
-        plt.show()
-        return
+    # 创建空图
+    h_num,w_num=cal_premutation(len(im_list))
+    result=Image.new(im_list[0].mode, (width*w_num, height*h_num))
 
-    def T_mode_show(feature, label):
-        feature = np.squeeze(feature)
-        unique_labels = np.unique(feature)
-        cmap = voc_colormap2cmap()  # 使用自定义的颜色条映射
-        # 创建标签与颜色之间的映射
-        norm = mcolors.BoundaryNorm(boundaries=np.arange(len(unique_labels) + 1) - 0.5, ncolors=len(unique_labels))
-        plt.imshow(feature, cmap=cmap, norm=norm)
-        plt.axis('off')
-        plt.title('Label' + label)
-        # 显示图像
-        plt.show()
-
-    def Weight_mode_show(feature, label):
-        H, W, C = feature.shape
-        if C == 1:  # 通道为1显示灰度图
-            plt.imshow(feature, cmap='gray')
+    # 图像拼接
+    for i in range(h_num):
+        for j in range(w_num):
+            index=i*w_num+j
+            result.paste(im_list[index],(width*j,height*i))
+            if (index+1)==len(im_list):
+                break
+    return result
+def Create_ImgForSeg(datas):
+    '''接受一个元组，为元组里的数据创建对比图，期望元组（x,t,predict），数据的shape（N，C，H，W）'''
+    datas=[as_numpy(data) for data in datas]
+    w_num=len(datas)
+    h_num=len(datas[0])
+    imgs=[]
+    for i in range(w_num):
+        data=datas[i]
+        N, C, H, W = data.shape
+        if C==3:
+            imgdatas=[data_norm(data[i],(0,255),np.uint8) for i in range(N)]
+        elif C==1:
+            imgdatas=[label_to_rgb(data[i][0]) for i in range(N)]
         else:
-            re_img = np.zeros((H_full, W_full, 3))
-            re_img[:, :, 0] = feature[:, :, 0]
-            re_img[:, :, 1] = feature[:, :, 1]
-            if C == 2:
-                re_img[:, :, 2] += 255
-            else:
-                re_img[:, :, 2] = feature[:, :, 2]
-            re_img = re_img[:, :, 0] * 0.2989 + re_img[:, :, 1] * 0.5870 + re_img[:, :, 2] * 0.1140
-            re_img = np.uint8(re_img)
-            plt.imshow(re_img, cmap='gray')
-        plt.axis('off')
-        plt.title('Feature' + label)
-        plt.show()
-        return
+            raise ValueError('数据的通道数不符合要求，要求通道为3或1')
+        imglist = [To_PIL(data) for data in imgdatas]
+        imglist = [image_pad(im) for im in imglist]
+        imgs.append(imglist)
+    width, height = imgs[0][0].size
+    result=Image.new(imgs[0][0].mode,(width*w_num,height*h_num))
+    for i in range(w_num):
+        for j in range(h_num):
+            imglist=imgs[i]
+            result.paste(imglist[j],(width*i,height*j))
+    return result
 
-    '''图像预处理'''
-    data = skystar.cuda.as_numpy(data)
-    if mode == 'feature' or mode == 'weight':
-        data = img_norm(data, _range=(0, 255))  # 把数据映射到0~255
-    data = data.astype(np.float32)
-    data = data.transpose(0, 2, 3, 1)
 
-    '''额外添加图片，满足图像x*x排列'''
-    num, H, W, C = data.shape
-    x = int_square_root(num)  # x*x
-    if x * x > num:
-        add_num = x * x - num
-        new_data = np.zeros((add_num, H, W, C), dtype=np.float32)
-        if mode == 'feature' or 'weight':
-            new_data += 255  # 生成白图
-        elif mode == 'label':
-            new_data += np.max(data)
-        data = np.concatenate((data, new_data), axis=0)
-    full_image = splicing(data, x, pad=pad, padnum=255)  # 图像填充和拼接
-
-    '''图像显示'''
-    if label is None:
-        label = ''
-    else:
-        label = ':' + label
-    H_full, W_full, C = full_image.shape
-    if mode == 'feature':
-        X_mode_show(full_image, label)
-    elif mode == 'label':
-        T_mode_show(full_image, label)
-    elif mode == 'weight':
-        Weight_mode_show(full_image, label)
-    else:
-        print(f'not support mode:{label}')
+def save_img(im,name='demo.jpg'):
+    dir = make_dir('figures')
+    if '.jpg' not in name:
+        name+='.jpg'
+    # 保存图片
+    im.save(os.path.join(dir,name))
