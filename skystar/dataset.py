@@ -1,14 +1,8 @@
 import numpy as np
-try:
-    from skystar.dataset_mnist.mnist import load_mnist
-    # from skystar.STL10 import read_all_images, read_labels
-    # from skystar.tiny_image import load_data
-    from skystar.sky_dataset.load import _loaddata
-except ImportError:
-    print('please check dataset path')
+import skystar.sky_dataset
 import os
 class Dataset:
-    def __init__(self,training=True,transform=None,target_transform=None, dtype=np.float32):
+    def __init__(self,training=True,transform=None,target_transform=None):
         self.training=training
         self.transform=transform
         self.target_transform=target_transform
@@ -19,11 +13,10 @@ class Dataset:
         self.data=None
         self.label=None
         self.prepare()
-        self.dtype = dtype
 
-    def set_datatype(self):
-        self.data=self.data.astype(self.dtype)
-        self.label=self.label.astype(self.dtype)
+    def set_datatype(self,dtype):
+        self.data=self.data.astype(dtype)
+
     def __getitem__(self, index):
         if isinstance(index, (int, np.integer)):  # 处理单个标量索引
             if self.label is None:
@@ -111,13 +104,13 @@ class selfdata_starsky(Dataset):
 
     def prepare(self):
         if self.split:
-            x_train, t_train, x_test, t_test = _loaddata(self.filename,split=self.split)
+            x_train, t_train, x_test, t_test = skystar.sky_dataset.loaddata(self.filename,split=self.split)
             if self.training:
                 self.data, self.label = x_train, t_train
             else:
                 self.data, self.label = x_test, t_test
         else:
-            x, t = _loaddata(self.filename,split=self.split)
+            x, t = skystar.sky_dataset.loaddata(self.filename,split=self.split)
             return x,t
 
 class Sindata(Dataset):
