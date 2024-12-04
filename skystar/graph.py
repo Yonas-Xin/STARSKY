@@ -5,7 +5,6 @@ from onnx.helper import (make_model, make_node, make_graph,
                          make_tensor, make_tensor_value_info)
 from onnx.checker import check_model
 from onnxsim import simplify
-import onnxruntime as ort
 
 import skystar
 
@@ -59,18 +58,18 @@ def save_graph(graph, model_name, file_name='Example.onnx', ifsimplify=False):
 
 
 # ===============================================================
-# 载入和使用onnx模型
+# 载入和使用onnx模型,（放弃使用）
 # ===============================================================
-def load_model(model_name):
-    session = ort.InferenceSession(model_name)
-    return session
-
-
-def model_predict(model, input):
-    input = input.astype(np.float32)
-    inputs = {"input": input}
-    outputs = model.run('output', inputs)
-    return outputs
+# def load_model(model_name):
+#     session = ort.InferenceSession(model_name)
+#     return session
+#
+#
+# def model_predict(model, input):
+#     input = input.astype(np.float32)
+#     inputs = {"input": input}
+#     outputs = model.run('output', inputs)
+#     return outputs
 
 
 # ===============================================================

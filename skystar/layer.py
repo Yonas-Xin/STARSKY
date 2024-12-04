@@ -109,8 +109,11 @@ class Layer:
     def save_weights(self, filename):
         '''获取当前脚本目录，并在目录下创建model_params用来储存参数'''
         self.to_cpu()
-        dir = os.path.dirname(os.path.abspath(__file__))
-        filename = os.path.join(dir, 'model_params', filename)
+        dir = os.getcwd()
+        dir = os.path.join(dir, 'model_params')
+        if not os.path.exists(dir):
+            os.makedirs(dir)
+        filename = os.path.join(dir, filename)
         params_dict = {}
         self._flatten_params(params_dict)
         if '_blocks' in params_dict:
@@ -125,7 +128,7 @@ class Layer:
 
         try:  # 如果系统中断了正在保存的文件，则将文件删除，避免文件不完整
             np.savez_compressed(filename, **array_dict)
-            print(f'Params saved！path:{filename}')
+            print(f'Weight params saved！path:{filename}')
         except (Exception, KeyboardInterrupt) as e:
             if os.path.exists(filename):
                 os.remove(filename)
@@ -133,10 +136,11 @@ class Layer:
             raise
 
     def load_weights(self, filename):
-        dir = os.path.dirname(os.path.abspath(__file__))
-        filename = os.path.join(dir, 'model_params', filename)
+        if not os.path.exists(filename):
+            dir = os.getcwd()
+            filename = os.path.join(dir, 'model_params',filename)
         if not os.path.exists(filename):  # 如果不存在该文件，直接结束函数
-            print('权重文件不存在，请训练网络！')
+            print('The network parameters are not exist！path:{}'.format(filename))
             return
         npz = np.load(filename,allow_pickle=True)
         params_dict = {}
@@ -149,7 +153,7 @@ class Layer:
                 params_dict=params_dict|dict
         for name, param in params_dict.items():
             param.data = npz[name]
-        print(f'网络参数加载成功！请注意参数类型为np.ndarray,训练或测试时根据需要转换参数格式path:{filename}')
+        print(f'The network parameters are loaded successfully！The params type:np.ndarray path:{filename}')
 
     def to_cpu(self):
         for param in self.params():
@@ -159,15 +163,15 @@ class Layer:
         for param in self.params():
             param.to_gpu()
 
-    def weight_show(self, mode='weight', label=None):
-        W = self.W.data
-        if W is not None:
-            if W.ndim == 4:
-                skystar.utils.images_show(W, mode=mode, label=label)
-            else:
-                print(f'权重值维度不匹配：{W.ndim}！=4')
-        else:
-            print('权重尚未初始化：None')
+    # def weight_show(self, mode='weight', label=None):
+    #     W = self.W.data
+    #     if W is not None:
+    #         if W.ndim == 4:
+    #             skystar.utils.images_show(W, mode=mode, label=label)
+    #         else:
+    #             print(f'权重值维度不匹配：{W.ndim}！=4')
+    #     else:
+    #         print('权重尚未初始化：None')
 
 
 # =============================================================================
