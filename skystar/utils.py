@@ -1,7 +1,7 @@
 import os
 import subprocess
 import urllib.request
-from skystar import no_grad
+from skystar import no_grad,Variable
 from skystar.cuda import get_array_module
 from skystar.cuda import as_numpy
 from skystar.sky_dataset import data_to_npz
@@ -118,11 +118,12 @@ def sum_to(x, shape):
     lead_axis = tuple(range(lead))
 
     axis = tuple([i + lead for i, sx in enumerate(shape) if sx == 1])
-    y = x.sum(lead_axis + axis, keepdims=True)
+    out = x.sum(lead_axis + axis, keepdims=True)
     if lead > 0:
-        y = y.data.squeeze(lead_axis)
-        y = skystar.Variable(y)
-    return y
+        if isinstance(out,Variable):
+            out.data = out.data.squeeze(lead_axis)
+        else:out = out.squeeze(lead_axis)
+    return out
 
 
 def reshape_sum_backward(gy, x_shape, axis, keepdims):
@@ -155,54 +156,51 @@ def reshape_sum_backward(gy, x_shape, axis, keepdims):
 
 
 def cross_entropy_error(y, t):  # 交叉熵误差，当t为非0-1形式时
-    xp = get_array_module(y)
-    if y.ndim <= 2:
-        if y.ndim == 1:  # 1把一维数据变为一行的二维数据
-            y = y.reshape(1, y.size)
-            t = t.reshape(1, t.size)
-
-        if t.size == y.size:  # 当t为0-1形式时提取最大值的索引,变为非0-1形式
-            t = t.argmax(axis=1)
-        batch_size = y.shape[0]  # 如果是一维数组的话，这里就会返回不正常值
-        pt = -xp.sum(xp.log(y[xp.arange(batch_size), t]) + 1e-5) / batch_size
-        return pt
+    '''
+    y[batch,num_classes,H,W],[batch,index,num_classes],[batch,num_classes]
+    t[batch,1,H,W],[batch,index],[batch,]
+    '''
+    xp=get_array_module(y)
+    if t.ndim == 4:
+        batch,num_classes,H,W = y.shape
+        try:
+            t=t.squeeze(axis=1)
+        except:
+            raise ValueError('t.shape must have shape [batch,1,index,num_classes]')
+        t=onehot(t,num_classes).transpose(0,3,1,2)
+        pt = -xp.sum(t * xp.log(y + 1e-5)) / H / W / batch
+    elif t.ndim == 2:
+        batch,index,num_classes = y.shape
+        t=onehot(t,num_classes)
+        pt = -xp.sum(t * xp.log(y + 1e-5)) / index / batch
+    elif t.ndim == 1:
+        batch, num_classes=y.shape
+        t=onehot(t,num_classes)
+        pt = -xp.sum(t * xp.log(y + 1e-5)) / batch
     else:
-        '''这里加入了语义分割模型下，像素级的交叉熵误差'''
-        if y.ndim == 3:
-            y = y.reshape(1, y.shape[0], y.shape[1], y.shape[2])
-        batch_size, num_class, H, W = y.shape
-        if t.ndim != 4:
-            t = t.reshape(1, 1, H, W)
-        '''将y变为二维数组，与t变为非0-1形式二维数组'''
-        t = onehot(t, num_class)
-        pt = -xp.sum(t * xp.log(y + 1e-7)) / H / W / batch_size
-        return pt
+        raise ValueError('t.ndim have to be 2 or 4')
+    return pt
+    # xp = get_array_module(y)
+    # if y.ndim <= 2:
+    #     if y.ndim == 1:  # 1把一维数据变为一行的二维数据
+    #         y = y.reshape(1, y.size)
+    #         t = t.reshape(1, t.size)
+    #     if t.size == y.size:  # 当t为0-1形式时提取最大值的索引,变为非0-1形式
+    #         t = t.argmax(axis=1)
+    #     batch_size = y.shape[0]  # 如果是一维数组的话，这里就会返回不正常值
+    #     pt = -xp.sum(xp.log(y[xp.arange(batch_size), t]) + 1e-5) / batch_size
+    #     return pt
+    # else:
+    #     '''这里加入了语义分割模型下，像素级的交叉熵误差'''
+    #     if y.ndim == 3:
+    #         y = y.reshape(1, y.shape[0], y.shape[1], y.shape[2])
+    #     batch_size, num_class, H, W = y.shape
+    #     t=t.squeeze()#t的形状可能为1，H，W或者H，W,强制变为H，W
+    #     '''将y变为二维数组，与t变为非0-1形式二维数组'''
+    #     t = onehot(t, num_class).transpose(2,0,1)
+    #     pt = -xp.sum(t * xp.log(y + 1e-5)) / H / W / batch_size
+    #     return pt
 
-
-def softmax(x):  # Softmax函数,输出层激活函数,用于多维数组
-    xp = get_array_module(x)
-    if x.ndim == 2:
-        x = x.T  # 转置操作，每一列代表一个样本，如果是行的话，广播会出错
-        c = xp.max(x, axis=0)  # 求出最大值，避免数据溢出
-        x_exp = xp.exp(x - c)  # 利用了广播，每一列的样本减去相同的值
-        sum = xp.sum(x_exp, axis=0)
-        y = x_exp / sum
-        return y.T
-
-    if x.ndim > 2:
-        '''这里加入了语义分割模型下，像素级的softmax分类'''
-        if x.ndim == 3:
-            axis = 0
-        else:
-            axis = 1
-        c = xp.max(x, axis=axis, keepdims=True)
-        x_exp = xp.exp(x - c)
-        sum = xp.sum(x_exp, axis=axis, keepdims=True)
-        y = x_exp / sum
-        return y
-
-    x = x - xp.max(x)  # 溢出对策
-    return xp.exp(x) / xp.sum(xp.exp(x))
 
 
 # def im2col(input_data, filter_h, filter_w, stride=1, pad=0):
@@ -377,11 +375,9 @@ def transconv_pad(x, stride=1, kernel_size=3, pad=0):
     for i in range(h):
         for j in range(w):
             mid_demox[:, :, i * (1 + middle_pad), j * (1 + middle_pad)] = x[:, :, i, j]
-
     # 使用edge_pad在图像边缘添加填充
     x = xp.pad(mid_demox, [(0, 0), (0, 0), (edge_pad, edge_pad), (edge_pad, edge_pad)], mode='constant')
     return x
-
 
 def back_transcov_pad(x, stride=1, kernel_size=3, pad=0):
     '''从反卷积结果中还原原始图像，用于上采样层的反向传播'''
@@ -389,10 +385,8 @@ def back_transcov_pad(x, stride=1, kernel_size=3, pad=0):
     edge_pad = kernel_size - 1 - pad
     middle_pad = stride - 1
     N, C, h, w = x.shape
-
     # 去除边缘填充
     x = x[:, :, edge_pad:h - edge_pad, edge_pad:w - edge_pad]
-
     h, w = x.shape[2], x.shape[3]
     # 计算去除中间填充后的尺寸
     new_h = int((h + middle_pad) // (1 + middle_pad))
@@ -404,7 +398,6 @@ def back_transcov_pad(x, stride=1, kernel_size=3, pad=0):
             out[:, :, i, j] = x[:, :, i * stride, j * stride]
 
     return out
-
 
 def bilinear_kernel(in_channels, out_channels, kernel_size, xp=np):
     '''创建一个双线性内插值的核，用于初始化上采样层的权重'''
@@ -423,26 +416,22 @@ def bilinear_kernel(in_channels, out_channels, kernel_size, xp=np):
 
 
 def onehot(x, num_classes):
-    '''此函数用于把标签t变为onehot形式'''
+    '''
+    此函数用于把标签t变为onehot形式,默认轴为最后一轴，本函数不改变数据轴
+    支持输入：[batch,index],[batch,H,W]
+    输出：[batch,index,num_classes],[batch,H,W,num_classes]
+    '''
     xp = get_array_module(x)
-    if x.ndim == 2:
-        '''这里可以扩展一维标签变为onehot形式'''
-        pass
-    if x.ndim != 4 and x.ndim != 2:
-        try:
-            C, H, W = x.shape
-            x = x.reshape(1, C, H, W)
-        except ValueError:
-            H, W = x.shape
-            x = x.reshape(1, 1, H, W)
-    batch, C, H, W = x.shape
-    x = x.reshape(-1)
+    x=x.astype(xp.int32)
+    return xp.eye(num_classes)[x]
+def word_to_idx(x, num_classes):
+    xp=get_array_module(x)
+    batch,seq_len=x.shape
+    x=x.reshape(-1)
     rex = xp.zeros((x.size, num_classes))
-    rex[xp.arange(len(x)), x] = 1
-    rex = rex.reshape(batch, H, W, num_classes)
-    rex = rex.transpose(0, 3, 1, 2)
+    rex[xp.arange(seq_len*batch), x] = 1
+    rex = rex.reshape(batch, seq_len, num_classes)
     return rex
-
 
 def accuracy(y, t):
     '''

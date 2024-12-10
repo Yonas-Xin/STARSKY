@@ -5,9 +5,10 @@ import skystar
 try:
     import cupy
     array_types=(np.ndarray,cupy.ndarray)
+    cupy.set_printoptions(precision=4)
 except ImportError:
     array_types=(np.ndarray)
-
+np.set_printoptions(precision=4)
 TrainingMode = True
 def Set_TrainingMode(mode: bool):
     if not isinstance(mode, bool):
@@ -72,6 +73,11 @@ class Variable:
         if self.data is not None:
             self.data=skystar.cuda.as_cupy(self.data)
 
+    def to_float32(self,dtype=None):
+        xp=skystar.cuda.get_array_module(self.data)
+        dtype=xp.float32
+        self.data=self.data.astype(dtype)
+
     def backward(self,retain_grad=False,create_graph=False):
         '''
         循环结构完成反向传播
@@ -82,7 +88,7 @@ class Variable:
             return None
         if self.grad is None:#初始化为Variable，便于计算导数的导数
             xp=skystar.cuda.get_array_module(self.data)
-            self.grad=Variable(xp.ones_like(self.data))
+            self.grad=Variable(xp.ones_like(self.data,dtype=xp.float32))#这里把grad变成了
         funcs=[self.creator]
         while funcs:
             f=funcs.pop()
@@ -98,6 +104,11 @@ class Variable:
                 同时会产生一个问题，如果对一个相同的变量反复反向传播，那么它的梯度会叠加，因此需要在
                 每次传播后使用self.cleangrad()初始化梯度'''
                 for x, dx in zip(f.inputs, dxs):  # x:Variable,dx:Variable
+                    # if isinstance(dx, Variable):
+                    #     dx.to_float32()
+                    # else:
+                    #     xp=skystar.cuda.get_array_module(dx)
+                    #     dx=dx.astype(xp.float32)
                     if x.grad is None:
                         x.grad = dx
                     else:
@@ -279,14 +290,14 @@ class Pow(Function):#幂函数
     def forward(self,x):
         return x**self.c
     def backward(self,dout):
-        x=self.inputs
+        x=self.inputs[0]
         dout=dout*self.c*x**(self.c-1)
         return dout
 
 def exp(x):
     func=Exp()
     return func(x)
-def sqaure(x):
+def square(x):
     func=Square()
     return func(x)
 def add(x0,x1):
@@ -336,8 +347,8 @@ def config_using(name, value):
 def no_grad():
     return config_using('enable_backprop', False)
 def as_scalar(x,array_module=np):#把数据变为np.ndarray或者cp.ndarray
-    if np.isscalar(x):
-        return array_module.array(x)
+    if array_module.isscalar(x):
+        return array_module.array(x,dtype=array_module.float32)#把数据转为float32
     return x
 def as_variable(x):#把数据变为Variable实例
     if isinstance(x,Variable):
@@ -402,7 +413,7 @@ def tanh(x):
     return Tanh()(x)
 class Reshape(Function):
     def forward(self,x,shape):
-        self.x_shape=shape
+        self.x_shape=x.shape
         x=x.reshape(shape)
         return x
     def backward(self,dout):
@@ -410,7 +421,7 @@ class Reshape(Function):
         return dout
 def reshape(x,shape):
     if isinstance(shape,tuple):
-        shape=np.asarray(shape)
+        shape=np.asarray(shape)#这里用cupy无法
     shape = Variable(shape,name='shape')
     if x.shape==shape:
         return as_variable(x)
@@ -427,7 +438,18 @@ class Dot(Function):#点积
         return dout0,dout1
 def dot(x0,x1):
     return Dot()(x0,x1)
-
+class Matmul(Function):
+    def forward(self,x0,x1):
+        xp=skystar.cuda.get_array_module(x0)
+        y=xp.matmul(x0,x1)
+        return y
+    def backward(self,dout):
+        x0,x1=self.inputs
+        dout0=matmul(dout,x1.data.swapaxes(-1,-2))#这里直接使用numpy或者cupy的swapaxes方法交换最后两轴
+        dout1=matmul(x0.data.swapaxes(-1,-2),dout)
+        return dout0,dout1
+def matmul(x0,x1):
+    return Matmul()(x0,x1)
 class Transpose(Function):
     def __init__(self, axes=None):
         self.axes = axes
@@ -437,13 +459,25 @@ class Transpose(Function):
     def backward(self, gy):
         if self.axes is None:
             return transpose(gy)
-        xp=skystar.cuda.get_array_module(gy)
+        # xp=skystar.cuda.get_array_module(gy)
         axes_len = len(self.axes)
-        inv_axes = tuple(xp.argsort([ax % axes_len for ax in self.axes]))
+        inv_axes = tuple(np.argsort([ax % axes_len for ax in self.axes]))
         return transpose(gy, inv_axes)
 def transpose(x, axes=None):
     return Transpose(axes)(x)
-
+class Swapaxis(Function):
+    def __init__(self, axis1, axis2):
+        self.axis1=axis1
+        self.axis2=axis2
+    def forward(self, x):
+        xp=skystar.cuda.get_array_module(x)
+        return xp.swapaxes(x,self.axis1,self.axis2)
+    def backward(self, dout):
+        dx=dout.data.swapaxes(self.axis1,self.axis2)
+        dx=Variable(dx)
+        return dx
+def swapaxis(x, axis1, axis2):
+    return Swapaxis(axis1, axis2)(x)
 class Sum(Function):
     def __init__(self,axis,keepdims):
         self.axis=axis
@@ -459,20 +493,51 @@ class Sum(Function):
 def sum(x,axis=None,keepdims=False):
     return Sum(axis,keepdims)(x)
 class BroadcastTo(Function):#广播
-    def __init__(self,shape):
-        self.shape=shape
-    def forward(self,x):
-        self.x_shape=x.shape
+    def forward(self,x, shape):
         xp=skystar.cuda.get_array_module(x)
-        y=xp.broadcast_to(x,self.shape)
+        y=xp.broadcast_to(x,shape)
         return y
     def backward(self,dout):
-        dout=sum_to(dout,self.x_shape)
+        input= self.inputs[0]
+        dout=sum_to(dout,input.shape)
         return dout
 def broadcast_to(x,shape):
+    # xp=skystar.cuda.get_array_module(x)
+    shape=Variable(np.asarray(shape,dtype=np.int32),name='shape')
     if x.shape==shape:
         return as_variable(x)
-    return BroadcastTo(shape)(x)
+    return BroadcastTo()(x,shape)
+
+
+class Gather(Function):#用于嵌入层
+    '''本函数的目的是对数组进行映射，映射有两种基本情况，即一个索引映射一个数据或一行数据
+    1、映射一行：输入数据满足（batch,row,col）,索引满足（batch,index,1），axis=1，输出（batch,index,col）
+    2、映射一个：输入数据满足（batch,col）,索引满足（batch，1），axis=1，输出（batch，1）
+    '''
+    def __init__(self, axis=1):
+        self.axis = axis  # 默认沿着第 0 轴进行 gather 操作
+    def forward(self, x, indices):
+        xp=skystar.cuda.get_array_module(x)
+        return xp.take_along_axis(x, indices, axis=self.axis)
+    def backward(self, dout):
+        '''暂时只适用于3D输入[batch,num1,dims],输出[batch,num2,1]，axis==1的情况'''
+        xp = skystar.cuda.get_array_module(dout)  # 获取合适的库
+        x,indices=self.inputs#Variable
+        batch,num,dims=x.shape
+        indices=indices.data.squeeze()
+        dindices=Variable(xp.zeros_like(indices))
+        onehot_indice=xp.eye(num)[indices].transpose(0,2,1)
+        dx=xp.matmul(onehot_indice,dout.data)
+        dx = Variable(dx)
+        return dx,dindices
+def gather(x, indices,axis=0):
+    '''这里输入的x,indices都是Variable'''
+    xp=skystar.cuda.get_array_module(x)
+    if not isinstance(indices, Variable):
+        indices=Variable(xp.asarray(indices,dtype=xp.int32))
+    indices.data=indices.data.astype(xp.int32)
+    return Gather(axis)(x, indices)
+
 class SumTo(Function):#广播
     def __init__(self,shape):
         self.shape=shape
@@ -518,11 +583,6 @@ class Slice(Function):
         :param axis: 一个一维张量，指定 starts 和 ends 应用的轴，如 [0, 1, 2, 3]。
         :param stride: 一个一维张量，指定每个轴的步长，如 [1, 1, 1, 1]。
         """
-        # self.starts = starts
-        # self.ends = ends
-        # self.axis = axis
-        # self.steps = steps
-
     def forward(self, x, starts, ends, axis, steps):
         """
         前向计算：对输入张量 x 进行切片。
@@ -548,17 +608,43 @@ class Slice(Function):
         dx[tuple(self.slices)] = dout  # 将 dout 放回切片位置
         return dx
 
-def my_slice(x, starts, ends, axis, steps):
-    """
-    使用自定义 Slice 类的简单接口函数。
-    :param x: 输入张量。
-    :param starts: 一个一维张量，包含每个维度的起始点。
-    :param ends: 一个一维张量，包含每个维度的结束点。
-    :param axis: 一个一维张量，指定 starts 和 ends 应用的轴。
-    :param stride: 一个一维张量，指定每个轴的步长。
-    :return: 切片后的张量。
-    """
+def my_slice(x, starts, ends, axis=None, steps=None):
+    if axis is None:
+        axis = list(range(len(starts)))  # 默认为所有轴
+    if steps is None:
+        steps = [1] * len(starts)  # 默认为步长为 1
+    xp=skystar.cuda.get_array_module(x)
+    starts = Variable(xp.array(starts,dtype=xp.int32),name='starts')
+    ends = Variable(xp.array(ends,dtype=xp.int32),name='ends')
+    steps = Variable(xp.array(steps,dtype=xp.int32),name='steps')
+    axis = Variable(xp.array(axis,dtype=xp.int32),name='axis')
     return Slice()(x,starts, ends, axis, steps)
+class Mean(Function):
+    def __init__(self, axis=None, keepdims=True):
+        self.axis = axis  # 支持传入 axis 参数
+        self.keepdims=keepdims
+    def forward(self, x):
+        xp=skystar.cuda.get_array_module(x)
+        self.original_x_shape = x.shape  # 保存原始输入形状
+        self.x = x
+        # 计算均值
+        if self.axis is None:
+            mean = xp.mean(x,keepdims=self.keepdims)  # 没有 axis 参数时，计算整个张量的均值
+        else:
+            mean= xp.mean(x, axis=self.axis, keepdims=self.keepdims)  # 按照指定的 axis 计算均值
+
+        return mean
+
+    def backward(self, dout):
+        xp=skystar.cuda.get_array_module(dout)
+        N = xp.prod(self.original_x_shape,dtype=xp.float32)  # 计算输入张量的总元素数
+        axis_len = xp.prod(xp.array(self.original_x_shape)[self.axis],dtype=xp.float32) if self.axis is not None else N
+        # 这里如何不是keepdims=True，则会报错，默认keepdims=True
+        dx = xp.ones_like(self.x,dtype=xp.float32) * dout.data / axis_len  # 使用 np.ones_like 保证 dx 形状与 x 相同
+        return dx
+def my_mean(x, axis=None,keepdims=True):
+    return Mean(axis,keepdims=keepdims)(x)
+
 
 # =============================================================================
 '''激活函数'''
@@ -591,43 +677,61 @@ def ReLU(x):
     return Relu()(x)
 
 class Softmax(Function):#用于分类的激活函数,用于输出和输入相等
+    def __init__(self,axis=None):
+        if axis is None:
+            self.axis=1
+        else:
+            self.axis=axis
     def forward(self,x):
-        y=skystar.utils.softmax(x)
+        xp = skystar.utils.get_array_module(x)
+        c = xp.max(x, axis=self.axis,keepdims=True)  # 求出最大值，避免数据溢出
+        x_exp = xp.exp(x - c)  # 利用了广播，每一列的样本减去相同的值,溢出对策
+        sum = xp.sum(x_exp, axis=self.axis,keepdims=True)
+        y = x_exp / sum
         return y
     def backward(self,dout):
         y=self.outputs[0]()
         return dout*y*(1-y)
-def softmax(x):
-    return Softmax()(x)
+def softmax(x,axis=None):
+    return Softmax(axis)(x)
 # =============================================================================
 '''loss函数'''
 # =============================================================================
 class SoftmaxCrossEntropyLoss(Function):#该函数结合了softmax和loss交叉熵误差函数，可以用作分类问题的最后一个激活函数
+    '''y[batch,num_classes,H,W],[batch,index,num_classes],[batch,num_classes]
+    t[batch,1,H,W],[batch,index],[batch,]'''
+    def __init__(self,axis=None):
+        if axis is not None:
+            self.axis=axis
+        else:self.axis=-1
     def forward(self,x0,x1):
-        y=skystar.utils.softmax(x0)
-        loss=skystar.utils.cross_entropy_error(y,x1)
+        y=softmax(x0,axis=self.axis)
+        loss=skystar.utils.cross_entropy_error(y.data,x1)
         return loss
     def backward(self,dout):#输出层反向传播输入导数1
-        xp=skystar.cuda.get_array_module(dout)
         x0,t=self.inputs
-        y=skystar.utils.softmax(x0.data)#ndarray
-        batch_size=y.shape[0]
-        if t.ndim!=4:
-            if y.size == t.size:
-                dout = (y - t) / batch_size  # 除以batch_size，传递单个数据的误差
-            else:  # 当t为非one—hot形式时，传递梯度
-                dout = Variable(y.copy())
-                dout.data[xp.arange(batch_size), t.data] -= 1
-                dout = dout / batch_size
+        y=softmax(x0,axis=self.axis)#Variable
+        if t.ndim==1:
+            batch,num_class=y.shape
+            t=Variable(skystar.utils.onehot(t.data,num_class))#Variable
+            dout = (y - t) / batch
+        elif t.ndim==2:
+            batch, index, num_class = y.shape
+            t=Variable(skystar.utils.onehot(t.data,num_class))#Variable
+            dout = (y - t) / batch
+        elif t.ndim==4:
+            t.data=t.data.squeeze(axis=1)
+            batch,num_class,H,W = y.shape
+            t=Variable(skystar.utils.onehot(t.data,num_class).transpose(0,3,1,2))#Variable
+            dout = (y - t) / batch
         else:
-            batch, num_class, H, W = y.shape
-            if y.size != t.size:
-                t=Variable(skystar.utils.onehot(t.data,num_classes=num_class))
-            dout=(y - t) / batch
+            raise ValueError('t.ndim==1 or t.ndim==2 or t.ndim==4')
         return dout
-def softmaxwithloss(x,t):
+def softmaxwithloss(x,t,axis=None):
     '''t:np.array或者cp.array'''
-    return SoftmaxCrossEntropyLoss()(x, t)
+    xp=skystar.utils.get_array_module(x)
+    t=Variable(xp.asarray(t),name='Label')#给t添加名字
+    return SoftmaxCrossEntropyLoss(axis)(x, t)
 
 class MeanSquaredError(Function):
     "均方误差，多用于时序模型和一些需要精准预测结果的模型"
@@ -670,21 +774,30 @@ class Gemm(Function):
             x=x.T
         if self.transB:
             W=W.T
-        y=xp.dot(x,W)*self.alpha+b*self.beta
+        if b is None:
+            y = xp.dot(x, W) * self.alpha
+        else:
+            y = xp.dot(x, W) * self.alpha + b * self.beta
         return y
     def backward(self,dout):
         x,W,b=self.inputs
         dW=dot(x.T,dout) * self.alpha
-        db=sum(dout,axis=0) * self.beta
+        if b is not None:
+            db = sum(dout, axis=0) * self.beta
         dout=dot(dout,W.T) * self.alpha
         dout=dout.reshape(*self.original_x_shape)
-        return dout,dW,db
+        if b is None:
+            return dout,dW
+        else:
+            return dout,dW,db
 def gemm(x, W, b, alpha=1, beta=1, transA=False, transB=False):
     return Gemm(alpha,beta,transA,transB)(x,W,b)
-
+# =============================================================================
+'''BatchNormalization'''
+# =============================================================================
 class BatchNormalization(Function):
-    '''batchnorm 均值和方差是针对特征通道计算的，对于二维数据（N,B），特征通道是B，对于（N,C,H,W），特征通道是C'''
-    def __init__(self,momentum=0.9):
+    '''batchnorm 均值和方差是针对特征通道计算的，对于二维数据（N,B），特征通道是B，对于（N,C,H,W），特征通道是C,暂时不考虑3D数据'''
+    def __init__(self,momentum=0.9,eps=1e-5):
         self.momentum=momentum#float
         self.xv=None#ndarray
         self.var=None#ndarray
@@ -692,6 +805,7 @@ class BatchNormalization(Function):
 
         self.test_mean=None#ndarray
         self.test_var=None#ndarray
+        self.eps=eps
     def forward(self,x,gamma,beta,input_mean,input_var):
         xp=skystar.cuda.get_array_module(x)
         self.test_mean=input_mean
@@ -719,14 +833,14 @@ class BatchNormalization(Function):
             var=self.test_var
         if x.ndim==4:
             x=x.transpose(0,2,3,1)
-            self.xv = ((x - mean) / xp.sqrt(var + 1e-7))
+            self.xv = ((x - mean) / xp.sqrt(var + self.eps))
             y = gamma * self.xv + beta
 
             self.xv=self.xv.transpose(0,3,1,2)
             y=y.transpose(0,3,1,2)
             return y
         if x.ndim==2:
-            self.xv = (x - mean) / xp.sqrt(var + 1e-7)
+            self.xv = (x - mean) / xp.sqrt(var + self.eps)
             y = gamma * self.xv + beta
             return y
     def backward(self,dout):
@@ -737,9 +851,9 @@ class BatchNormalization(Function):
             dgamma=sum(dout*self.xv,axis=0)#Variable
             dbeta=sum(dout,axis=0)#Variable
             dxv=dout*gamma#Variable
-            dvar=sum(dxv*(x-self.mean)*xp.power(self.var + 1e-7, -1.5)*(-0.5),axis=0)#Variable
-            dmean=-1.0*sum(dxv,axis=0)/xp.sqrt(self.var+1e-7)+dvar*sum(-2.0*(x-self.mean),axis=0)/N#Variable
-            dx=dxv/xp.sqrt(self.var+1e-7)+dvar*2*(x-self.mean)/N+dmean/N#Variable
+            dvar=sum(dxv*(x-self.mean)*xp.power(self.var + self.eps, -1.5)*(-0.5),axis=0)#Variable
+            dmean=-1.0*sum(dxv,axis=0)/xp.sqrt(self.var+self.eps)+dvar*sum(-2.0*(x-self.mean),axis=0)/N#Variable
+            dx=dxv/xp.sqrt(self.var+self.eps)+dvar*2*(x-self.mean)/N+dmean/N#Variable
         else:
             N=dout.shape[0]*dout.shape[2]*dout.shape[3]
             dgamma=sum(dout*self.xv,axis=(0,2,3))
@@ -749,32 +863,73 @@ class BatchNormalization(Function):
             x=x.transpose(0,2,3,1)
             dxv=dout*gamma
 
-            dvar=sum(dxv*(x-self.mean)*xp.power(self.var + 1e-7, -1.5)*(-0.5),axis=(0,1,2))#Variable
-            dmean=-1.0*sum(dxv,axis=(0,1,2))/xp.sqrt(self.var+1e-7)+dvar*sum(-2.0*(x-self.mean),axis=(0,1,2))/N#Variable
-            dx=dxv/xp.sqrt(self.var+1e-7)+dvar*2*(x-self.mean)/N+dmean/N#Variable
+            dvar=sum(dxv*(x-self.mean)*xp.power(self.var + self.eps, -1.5)*(-0.5),axis=(0,1,2))#Variable
+            dmean=-1.0*sum(dxv,axis=(0,1,2))/xp.sqrt(self.var+self.eps)+dvar*sum(-2.0*(x-self.mean),axis=(0,1,2))/N#Variable
+            dx=dxv/xp.sqrt(self.var+self.eps)+dvar*2*(x-self.mean)/N+dmean/N#Variable
             dx=dx.transpose(0,3,1,2)
         return dx,dgamma,dbeta
+# =============================================================================
+'''LayerNorm'''
+# =============================================================================
+class LayerNorm(Function):
+    '''只考虑了3D输入的情况（batch，seqlen，embedding_nidm）'''
+    def __init__(self, epsilon=1e-5):
+        self.epsilon = epsilon  # 防止除零的小常数
+
+    def forward(self, x, gamma, beta):
+        xp=skystar.cuda.get_array_module(x)
+        # 计算均值和方差,对最后一维进行归一化，这里与batchnorm不同
+        self.mean = xp.mean(x, axis=-1, keepdims=True)
+        self.var = xp.var(x, axis=-1, keepdims=True)
+        # 归一化
+        self.x_hat = (x - self.mean) / xp.sqrt(self.var + self.epsilon)
+        # 缩放和平移
+        out = gamma * self.x_hat + beta
+        return out
+
+    def backward(self, dout):
+        xp=skystar.cuda.get_array_module(dout)
+        x,gamma,beta=self.inputs
+        # 计算梯度
+        Bath,N, D = dout.shape  # 输入的样本数量和特征维度
+        dx_hat = dout * gamma  # 先计算归一化的梯度
+        # 计算方差和均值的梯度
+        dvar = xp.sum(dx_hat.data * (self.x_hat * -0.5) * xp.power(self.var + self.epsilon, -1.5), axis=-1, keepdims=True)
+        dmean = xp.sum(dx_hat.data * -1 / xp.sqrt(self.var + self.epsilon), axis=-1, keepdims=True) + dvar * xp.mean(-2 * self.x_hat, axis=-1, keepdims=True)
+        # 计算输入的梯度
+        dx = Variable(dx_hat.data / xp.sqrt(self.var + self.epsilon) + dvar * 2 * self.x_hat / D + dmean / D)
+        dgamma = Variable(xp.sum(dout.data * self.x_hat, axis=(0,1)))#
+        dbeta = Variable(xp.sum(dout.data, axis=(0,1)))#
+        # 返回梯度
+        return dx, dgamma, dbeta
+def layernorm(x,gamma,beta,epsilon=1e-5):
+    return LayerNorm(epsilon)(x,gamma,beta)
+# =============================================================================
+'''Dropout'''
+# =============================================================================
 class Dropout(Function):
     '''训练时随机删除神经元节点，有效避免过拟合'''
-    def __init__(self,ratio=0.5):
-        self.ratio=ratio
+    def __init__(self):
         self.mask=None
-    def forward(self,x):
+    def forward(self,x, ratio, training_mode):
         xp=skystar.cuda.get_array_module(x)
         if Get_TrainingMode():
             rand = xp.random.rand(*x.shape)  # 生成与x形状相同的随机数
-            self.mask = (rand < self.ratio)
+            self.mask = (rand < ratio)
             y = x.copy()
             y[self.mask] = 0#被标记的神经元
-            y/=(1.0 - self.ratio)#缩放处理，保持输出一致性
+            y/=(1.0 - ratio)#缩放处理，保持输出一致性
         else:
             y=x#测试时不对数据进行缩放，因为所有神经元都要输出
         return y
     def backward(self, dout):
          dout.data[self.mask]=0
          return dout
-def dropout(x,ratio=0.5):
-    return Dropout(ratio=ratio)(x)
+def dropout(x,ratio=0.5,training_mode=False):
+    xp=skystar.cuda.get_array_module(x)
+    ratio = Variable(xp.array([ratio],dtype=xp.float32),name='ratio')
+    training_mode = Variable(xp.array([Get_TrainingMode()],dtype=xp.int32),name='training_mode')
+    return Dropout()(x,ratio,training_mode)
 
 # =============================================================================
 '''卷积网络层函数'''
@@ -955,3 +1110,10 @@ class AveragePool(Function):
         return dx
 def avgpool(x,pool_size,stride=1,pad=0):
     return AveragePool(pool_size,stride,pad)(x)
+
+# class Gather(Function):
+#     def __init__(self, shape):
+#         pass
+#     def forward(self, x):
+#         pass
+
