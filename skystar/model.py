@@ -1,12 +1,11 @@
-import os.path
-
 import skystar.utils
-# import matplotlib.pyplot as plt
-
-from skystar.layer import *
+import numpy as np
+from skystar import no_grad, Get_TrainingMode, Set_TrainingMode
+from skystar.core import sigmoid, dropout, ReLU
+from skystar.layer import Layer, Gemm, Affine, Convolution, Pooling, BatchNorm, RNN, ResidualBlock, \
+    Transpose_Convolution, LSTM, TransitionBlock, DenseBlock, CopyAndCrop, Encoder, Decoder
 from skystar.utils import plot_dot_graph
-from skystar.graph import create_graph, save_graph
-from skystar.optimizer import Adam
+from skystar.optimizer import Adam,SGD,MomentumSGD,AdaGrad
 from tqdm import tqdm  # 添加进度条
 import time
 
@@ -40,27 +39,6 @@ class Model(Layer):
             y.data = np.argmax(y.data, axis=1)
             sum = t.size
             return np.sum(y.data == t) / sum
-
-    def save_to_onnx(self, input, name=None, ifsimplify=True):
-        '''
-        :param input: 需要使用一个模型的输入
-        :param name: 不支持绝对路径
-        :return:
-        '''
-        model_name = self.__class__.__name__
-        if name is None:
-            name = model_name + ".onnx"
-        self.to_cpu()#把模型数据和输入全部变为np.array
-        input = skystar.cuda.as_numpy(input)
-        dir = os.getcwd()
-        dir = os.path.join(dir, 'model_params')
-        if not os.path.exists(dir):
-            os.makedirs(dir)
-        path = os.path.join(dir, name)
-        y = self.forward(input)
-        graph = create_graph(y)
-        save_graph(graph, model_name, file_name=path, ifsimplify=ifsimplify)
-        return
 
     def train(self, train, test=None, mode='Segmentation', lr=0.001, epoch=300, use_gpu=True, interval_epoch=25, plot=True):
         if mode == 'Sort':
@@ -122,11 +100,11 @@ class Model(Layer):
                     sum_acc += accuracy(y, t) * len(t)
                 sum_loss += loss.data
 
-            print(f'Train_Loss {sum_loss / len(train)}')
-            self.results[0].append(sum_loss / len(train))
+            print(f'Train_Loss {sum_loss / train.data_size}')
+            self.results[0].append(sum_loss / train.data_size)
             if accuracy is not None:
-                print(f'Train_Acc {sum_acc / len(train)}')
-                self.results[1].append(sum_acc / len(train))
+                print(f'Train_Acc {sum_acc / train.data_size}')
+                self.results[1].append(sum_acc / train.data_size)
 
             if test is not None:
                 '''这里已经将数据加载到gpu上，因此默认use_gpu为False'''
@@ -200,11 +178,11 @@ class Model(Layer):
             self.reset_state()
             print(f'Epoch {i + 1}:')
             loss,count = 0.0, 0
-            for x, t in tqdm(train, desc='Training', total=len(train)):
+            for x, t in tqdm(train, desc='Training', total=train.max_iter):
                 y=self(x)
                 loss+=loss_func(y, t)
                 count+=1
-                if count%BPTT == 0 or count == len(train):
+                if count%BPTT == 0 or count == train.data_size:
                     self.cleangrads()
                     loss.backward()
                     loss.unchain_backward()
@@ -216,27 +194,6 @@ class Model(Layer):
             name = self.__class__.__name__
             print('Saving the model params......')
             self.save_weights(filename=name)
-
-
-# =============================================================================
-'''使用Sequential类自由组合block，打造model。自由生成的Sequential可以使用Model的所有函数'''
-# =============================================================================
-class Sequential(Model):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self,x):
-        for layername in self._layers:
-            layer = self.__dict__[layername]
-            x = layer(x)
-        return x
-
-    def CreateModel(self,model):
-        for layername in model._layers:
-            layer = model.__dict__[layername]
-            self.__setattr__(layername,layer)
-
-
 
 # =============================================================================
 '''一些经典的model'''
@@ -680,3 +637,29 @@ class U_net(Model):
         x = ReLU(self.conv9_1(x))  # 16 392
         x = ReLU(self.conv9_2(x))  # 16 390
         return x
+class Transformer(Layer):
+    def __init__(self,word_num=10,embedding_dim=512,dff=2048, dkv=64, n_heads=8):
+        '''
+        :param word_num:单词的总数
+        :param embedding_dim:词嵌入的维度
+        :param dff:前向传播层的隐藏层维度
+        :param dkv:自注意力层k，v的维度
+        :param n_heads:多头注意力的头数
+        '''
+        super().__init__()
+        self.name='Transformer'
+        self.embedding_dim=embedding_dim
+        self.Encoder=Encoder(word_num,embedding_dim,dff=dff,dkv=dkv,n_heads=n_heads)
+        self.Decoder=Decoder(word_num,embedding_dim,dff=dff,dkv=dkv,n_heads=n_heads)
+        self.Gemm=Gemm(word_num)#最后映射输出
+    def forward(self,enc_input,dec_input):
+        batch,sqrlen=dec_input.shape
+        enc_output=self.Encoder(enc_input)
+        dec_output=self.Decoder(dec_input,enc_input,enc_output)
+        dec_self_attention=self.Decoder.MutiHead.attention
+        dec_cross_attention=self.Decoder.CorssMutiHead.attention
+
+        dec_output=dec_output.reshape(-1,self.embedding_dim)
+        dec_output=self.Gemm(dec_output)
+        dec_output=dec_output.reshape(batch,sqrlen,-1)
+        return dec_output,dec_self_attention,dec_cross_attention
