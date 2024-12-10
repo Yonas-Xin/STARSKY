@@ -3,6 +3,7 @@ import numpy as np
 from skystar import cuda
 
 class Dataloader:
+    '''从Dataloader取出的数据维度ndim一致'''
     def __init__(self,dataset,batch_size,shuffle=True,gpu=False,dtype=np.float32):
         self.dataset=dataset
         self.batch_size=batch_size
@@ -12,7 +13,6 @@ class Dataloader:
         self.gpu=gpu
 
         self.reset()
-        self.dataset.set_datatype(dtype)#初始化时更新数据type
 
     def reset(self):
         self.iteration=0
@@ -34,8 +34,8 @@ class Dataloader:
         batch_index=self.index[i*batch_size:(i+1)*batch_size]
         batch=[self.dataset[i] for i in batch_index]
         xp=cuda.cupy if self.gpu else np
-        x=xp.array([example[0] for example in batch])
-        t=xp.array([example[1] for example in batch])
+        x=xp.array([example[0] for example in batch],dtype=xp.float32)
+        t=xp.array([example[1] for example in batch],dtype=xp.int32)
 
         self.iteration+=1
         return x,t
@@ -50,7 +50,7 @@ class Dataloader:
         self.gpu=True
 
     def __len__(self):
-        return self.data_size
+        return self.max_iter
 
 
 
@@ -63,23 +63,40 @@ class SeqDataloader(Dataloader):
         if self.iteration>=self.max_iter:
             self.reset()
             raise StopIteration
-
-        jump=self.data_size//self.batch_size#获取偏移量
+        '''偏移：假如一个时序数据（1，2，3，4，5，6），batch为2，那么数据分为两组，取三次数据（1，4）（2，5）（3，6）
+        如果数据本身就是一个序列，如（1，4）是两个具有高维的序列数据，偏移与否不影响最后的输出'''
+        jump=self.data_size//self.batch_size#获取偏移量,用于时序偏移
         batch_index=[(i*jump+self.iteration)%self.data_size for i in range(self.batch_size)]
         batch=[self.dataset[i] for i in batch_index]
+        xp = cuda.cupy if self.gpu else np
+        if len(batch[0])==2:
+            x=xp.array([example[0] for example in batch],dtype=xp.float32)
+            t=xp.array([example[1] for example in batch],dtype=xp.int32)
 
-        xp=cuda.cupy if self.gpu else np
-        x=xp.array([example[0] for example in batch])
-        t=xp.array([example[1] for example in batch])
+            #如果数据集是一维，将他们变为二维，每一列为一个批量
+            if x.ndim==1:
+                x=x.reshape(-1,1)
+            if t.ndim==1:
+                t=t.reshape(-1,1)
+            self.iteration+=1
+            return x,t
+        elif len(batch[0])==3:
+            x = xp.array([example[0] for example in batch],dtype=xp.float32)
+            y = xp.array([example[1] for example in batch],dtype=xp.int32)
+            t = xp.array([example[2] for example in batch],dtype=xp.int32)
 
-        #如果数据集是一维，将他们变为二维，每一列为一个批量
-        if x.ndim==1:
-            x=x.reshape(-1,1)
-        if t.ndim==1:
-            t=t.reshape(-1,1)
-        self.iteration+=1
-        return x,t
+            # 如果数据集是一维，将他们变为二维，每一列为一个批量
+            if x.ndim == 1:
+                x = x.reshape(-1, 1)
+            if t.ndim == 1:
+                t = t.reshape(-1, 1)
+            if y.ndim == 1:
+                y = y.reshape(-1, 1)
+            self.iteration += 1
+            return x,y,t
+        else:
+            raise StopIteration
 
     def __len__(self):
         '''序列数据的长度等于序列长度除以批次，向上取整'''
-        return math.ceil(self.data_size/self.batch_size)
+        return self.max_iter
