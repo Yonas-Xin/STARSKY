@@ -1,5 +1,10 @@
 import numpy as np
 import onnx
+try:
+    import cupy
+    inttype = (cupy.int32, cupy.int64, np.int32, np.int64)
+except ImportError:
+    inttype = (np.int32, np.int64)
 from onnx import TensorProto
 from onnx.helper import (make_model, make_node, make_graph,
                          make_tensor, make_tensor_value_info)
@@ -21,6 +26,7 @@ class Graph:
         self.inputs = []
         self.outputs = []
         self.initializers = []
+        self.inputsinfo=[]
         self.last_func_id = None
         self.inputindex = 1
 
@@ -37,7 +43,7 @@ class Graph:
 # ===============================================================
 # 将graph保存为onnx
 # ===============================================================
-def save_graph(graph, model_name, file_name='Example.onnx', ifsimplify=False):
+def save_graph(graph, model_name, file_name='Example.onnx', ifsimplify=False, version=15):
     _graph = make_graph(
         nodes=graph.nodes,
         name=model_name,
@@ -45,7 +51,7 @@ def save_graph(graph, model_name, file_name='Example.onnx', ifsimplify=False):
         outputs=graph.outputs,
         initializer=graph.initializers
     )
-    onnx_model = make_model(graph=_graph, opset_imports=[onnx.helper.make_opsetid("", 15)])  # 指定版本
+    onnx_model = make_model(graph=_graph, opset_imports=[onnx.helper.make_opsetid("", version)])  # 指定版本
     check_model(model=onnx_model)
     if ifsimplify:
         model_simplified, check = simplify(onnx_model)
@@ -77,6 +83,8 @@ def save_graph(graph, model_name, file_name='Example.onnx', ifsimplify=False):
 # ===============================================================
 def create_graph(output):
     graph = Graph()
+    if isinstance(output, tuple):
+        output = output[0]
     fs = [output.creator]
     graph.last_func_id = id(fs[0])
     graph.outputs.append(make_tensor_value_info('Output', TensorProto.FLOAT, list(output.shape)))
@@ -112,37 +120,46 @@ def _graph_node(f, graph):
 # ===============================================================
 def generate_names(f, graph):
     inputs_name = []
-    for input in f.inputs:
-        if input.data is not None:#考虑到卷积层的b可能为None
-            if input.name is not None:
-                inputs_name.append(input.name+f'_{id(input)}')
+    if f.generation != 0:
+        for input in f.inputs:
+            if input.data is not None:  # 考虑到卷积层的b可能为None
+                if input.name is not None:
+                    inputs_name.append(input.name + f'_{id(input)}')
+                else:
+                    inputs_name.append(f'mid_{id(input)}')
+    else:
+        for input in f.inputs:
+            if id(input) in graph.inputsinfo:
+                continue
             else:
-                inputs_name.append(f'mid_{id(input)}')
-    if f.generation == 0:
-        inputs_name[0] = f'Input{graph.inputindex}'
-        node = make_tensor_value_info(f'Input{graph.inputindex}', TensorProto.FLOAT, list(f.inputs[0].shape))
-        graph.inputindex += 1
-        graph.inputs.append(node)
+                if input.name is None:
+                    index = len(graph.inputs)+1
+                    node = make_tensor_value_info(f'Input{index}', TensorProto.FLOAT, list(input.shape))
+                    graph.inputs.append(node)
+                    inputs_name.append(f'Input{index}')
+                else:
+                    inputs_name.append(input.name + f'_{id(input)}')
+
     outputs_name = [f'mid_{id(f.outputs[0]())}']
     if id(f) == graph.last_func_id:
         outputs_name = ['Output']
     return inputs_name, outputs_name
 
-
 # ===============================================================
-# 根据函数的输入生成initializers，如何函数的输入具有name，则将其纳入initializers
+# 根据函数的输入生成initializers，如果函数的输入具有name，则将其纳入initializers
 # ===============================================================
 def generate_initializers(f, graph):
     for input in f.inputs:
+        if input.name is None and input.generation==0 and f.generation != 0:
+            input.name = 'mid'#这里是对那些除开输入数据外，首次出现的数据进行命名
         if input.name is not None and input.data is not None:
-            if input.data.dtype in [np.int32,np.int64]:
+            if isinstance(input.data, inttype):
                 datatype=TensorProto.INT32
             else:
                 datatype=TensorProto.FLOAT
             initializer = make_tensor(input.name + f'_{id(input)}', datatype, list(input.shape), input.data)
             if initializer not in graph.initializers:
                 graph.initializers.append(initializer)
-
 
 # ===============================================================
 # create函数，创建Function节点
@@ -177,7 +194,7 @@ def create_AveragePool_node(f, graph):
     return create_node(f, graph, 'AveragePool', kernel_shape=[f.pool_size, f.pool_size],
                        strides=[f.stride, f.stride], pads=[0, 0, f.pad, f.pad])
 def create_dropout_node(f, graph):
-    return create_node(f, graph, 'Dropout', seed=f.ratio, training_mode=skystar.Get_TrainingMode(), mask=f.mask)
+    return create_node(f, graph, 'Dropout')
 def create_conv_node(f, graph):
     '''需要初始化权重'''
     return create_node(f, graph, 'Conv',
@@ -209,7 +226,7 @@ def create_batchNormalization_node(f, graph):
 def create_sigmoid_node(f, graph):
     return create_node(f, graph, 'Sigmoid')
 def create_softmax_node(f, graph):
-    pass
+    return create_node(f, graph, 'Softmax', axis=1)
 def create_meansquarederror_node(f, graph):
     pass
 def create_gemm_node(f, graph):
@@ -222,8 +239,20 @@ def create_slice_node(f, graph):
     return create_node(f, graph, 'Slice')
 def create_tanh_node(f, graph):
     return create_node(f, graph, 'Tanh')
-
-
+def create_dic_node(f, graph):
+    return create_node(f, graph, 'Div')
+def create_transpose_node(f, graph):#矩阵转置,不完善
+    return create_node(f, graph, 'Transpose',perm=None)
+def create_reducemean_node(f, graph):
+    pass
+def create_layernorm_node(f,graph):
+    return create_node(f, graph, 'LayerNormalization', axis=-1, epsilon=1e-5)
+def create_gather_node(f, graph):
+    return create_node(f, graph, 'Gather', axis=f.axis)
+def create_expand_node(f, graph):
+    return create_node(f, graph, 'Expand')
+def create_sub_node(f,graph):
+    return create_node(f, graph, 'Sub')
 # 使用节点的字典
 function_nodes = {
     'SoftmaxCrossEntropyLoss': create_softmaxcrossentropyloss_node,
@@ -244,5 +273,12 @@ function_nodes = {
     "AveragePool": create_AveragePool_node,
     'Reshape': create_Reshape_node,
     'Slice': create_slice_node,
-    'Tanh': create_tanh_node
+    'Tanh': create_tanh_node,
+    'Div': create_dic_node,
+    'Transpose': create_transpose_node,
+    'LayerNorm': create_layernorm_node,
+    'BroadcastTo':create_expand_node,
+    'Gather':create_gather_node,
+    'Matmul':create_matmul_node,
+    'Sub': create_sub_node,
 }
