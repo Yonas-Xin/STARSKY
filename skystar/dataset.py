@@ -13,10 +13,6 @@ class Dataset:
         self.data=None
         self.label=None
         self.prepare()
-
-    def set_datatype(self,dtype):
-        self.data=self.data.astype(dtype)
-
     def __getitem__(self, index):
         if isinstance(index, (int, np.integer)):  # 处理单个标量索引
             if self.label is None:
@@ -84,16 +80,16 @@ class Stl_10(Dataset):
             self.label=read_labels(Y_path)
             self.label=self.label-1#该数据的标签从1开始
 
-# class Tiny_image(Dataset):
-#     def __init__(self,training=True,transform=None,target_transform=None):
-#         super().__init__(training,transform,target_transform)
-#
-#     def prepare(self):
-#         x_train, t_train, x_test, t_test=load_data()
-#         if self.training:
-#             self.data,self.label=x_train,t_train
-#         else:
-#             self.data,self.label=x_test,t_test
+class Tiny_image(Dataset):
+    def __init__(self,training=True,transform=None,target_transform=None):
+        super().__init__(training,transform,target_transform)
+
+    def prepare(self):
+        x_train, t_train, x_test, t_test=load_data()
+        if self.training:
+            self.data,self.label=x_train,t_train
+        else:
+            self.data,self.label=x_test,t_test
 
 class selfdata_starsky(Dataset):
     def __init__(self,filename,training=True,transform=None,target_transform=None,split=True):
@@ -114,6 +110,7 @@ class selfdata_starsky(Dataset):
             return x,t
 
 class Sindata(Dataset):
+    '''三角函数测试数据集，用于时序模型测试'''
     def __init__(self,training=True,size=1000):
         super().__init__(training)
         self.size=size
@@ -122,6 +119,40 @@ class Sindata(Dataset):
         self.ForPredictData=np.cos(np.linspace(0,4*np.pi,size))
 
     def prepare(self):
-        if self.training:
-            self.data=self.Seqdata[0:self.size-1]
-            self.label=self.Seqdata[1:self.size]
+        self.data=self.Seqdata[0:self.size-1]
+        self.label=self.Seqdata[1:self.size]
+
+class TranslationDataset(Dataset):
+    '''用于transformer的翻译数据集，输出三个数据，enc_inputs（编码器输入），dec_inputs（解码器输入），dec_outputs（解码器输出）'''
+    def __init__(self,sentences, src_vocab, tgt_vocab,training=True):
+        super().__init__(training)
+        self.src_vocab = src_vocab
+        self.tgt_vocab = tgt_vocab
+        self.sentences = sentences
+
+        self.init_params()
+        self.enc_inputs,self.dec_inputs,self.dec_outputs=self.make_data()
+    def __getitem__(self, index):
+        if isinstance(index, (int, np.integer)):  # 处理单个标量索引
+                return self.enc_inputs[index], self.dec_inputs[index],self.dec_outputs[index]
+        elif isinstance(index, slice):  # 处理切片索引
+                return self.enc_inputs[index],self.dec_inputs[index],self.dec_outputs[index]
+        else:
+            raise TypeError(f'Invalid index type: {type(index)}')
+    def __len__(self):
+        return len(self.enc_inputs)
+    def init_params(self):
+        self.src_vocab_size = len(self.src_vocab)#源字典大小
+        self.tgt_vocab_size = len(self.tgt_vocab)#目标字典大小
+        self.src_len = len(self.sentences[0][0].split(" "))#源句子长度
+        self.tgt_len = len(self.sentences[0][1].split(" "))#目标句子长度
+    def make_data(self):
+        enc_inputs, dec_inputs, dec_outputs = [], [], []
+        for i in range(len(self.sentences)):
+            enc_input = [[self.src_vocab[n] for n in self.sentences[i][0].split()]]
+            dec_input = [[self.tgt_vocab[n] for n in self.sentences[i][1].split()]]
+            dec_output = [[self.tgt_vocab[n] for n in self.sentences[i][2].split()]]
+            enc_inputs.extend(enc_input)
+            dec_inputs.extend(dec_input)
+            dec_outputs.extend(dec_output)
+        return np.float32(enc_inputs), np.float32(dec_inputs), np.float32(dec_outputs)
