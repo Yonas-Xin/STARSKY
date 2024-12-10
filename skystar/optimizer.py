@@ -79,7 +79,7 @@ class AdaGrad(Optimizer):
             self.hs[h_key]=np.zeros_like(param.data)
 
         self.hs[h_key]+=param.grad.data*param.grad.data
-        param.data-=self.lr*param.grad.data/(np.sqrt(self.hs[h_key]+1e-7))
+        param.data-=self.lr*param.grad.data/(np.sqrt(self.hs[h_key]+1e-6))
 
 
 class Adam(Optimizer):
@@ -103,4 +103,4 @@ class Adam(Optimizer):
         lr_t = self.lr * np.sqrt(1.0 - self.beta2 ** iter) / (1.0 - self.beta1 ** iter)
         self.ms[_key] += (1 - self.beta1) * (param.grad.data - self.ms[_key])
         self.vs[_key] += (1 - self.beta2) * (param.grad.data ** 2 - self.vs[_key])
-        param.data -= lr_t * self.ms[_key] / (np.sqrt(self.vs[_key]) + 1e-7)
+        param.data -= lr_t * self.ms[_key] / (np.sqrt(self.vs[_key]) + 6)
